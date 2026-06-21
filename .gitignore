@@ -1,0 +1,19 @@
+# Environment variables & secrets
+.env
+secrets/
+
+# Datasets & Outputs
+dataset/
+
+# Python caching
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+env/
+.env_dir/
+
+# OS generated files
+.DS_Store
+Thumbs.db

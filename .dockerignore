@@ -1,0 +1,15 @@
+.env
+.git
+.agents
+.codex
+dataset
+secrets
+__pycache__
+*.pyc
+*.pyo
+*.log
+.venv
+venv
+env
+Dockerfile
+docker-compose.yml
