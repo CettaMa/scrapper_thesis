@@ -10,10 +10,7 @@ services:
       CCTV_CONFIG_FILE: /app/cctv_points.csv
       CCTV_OUTPUT_ROOT: /app/dataset
       TZ: Asia/Jakarta
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
     volumes:
       - ./dataset:/app/dataset
       - ./cctv_points.csv:/app/cctv_points.csv:ro
       - ./secrets:/app/secrets:ro
-    gpus: all
