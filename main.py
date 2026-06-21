@@ -109,7 +109,7 @@ class RuntimeConfig:
     archive_buffer_size: str
     archive_output_height: int
     drive_upload_enabled: bool
-    drive_service_account_file: Path
+    drive_auth_file: Path
     drive_folder_id: str
     drive_scan_seconds: int
     drive_safe_age_seconds: int
@@ -359,7 +359,7 @@ def load_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
         archive_buffer_size=env_str("ARCHIVE_BUFFER_SIZE", "1300k"),
         archive_output_height=env_int("ARCHIVE_OUTPUT_HEIGHT", 0),
         drive_upload_enabled=env_bool("GOOGLE_DRIVE_UPLOAD_ENABLED", False),
-        drive_service_account_file=Path(env_str("GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE", "secrets/google-service-account.json")),
+        drive_auth_file=Path(env_str("GOOGLE_DRIVE_AUTH_FILE", "secrets/token.json")),
         drive_folder_id=env_str("GOOGLE_DRIVE_FOLDER_ID", ""),
         drive_scan_seconds=drive_scan_seconds,
         drive_safe_age_seconds=drive_safe_age_seconds,
@@ -1448,10 +1448,10 @@ class GoogleDriveUploader(threading.Thread):
             self.logger.error("GOOGLE_DRIVE_FOLDER_ID kosong. Google Drive uploader disabled.")
             return
 
-        if not self.config.drive_service_account_file.exists():
+        if not self.config.drive_auth_file.exists():
             self.logger.error(
-                "Google service account file tidak ditemukan: %s. Google Drive uploader disabled.",
-                self.config.drive_service_account_file,
+                "Google Drive Auth file tidak ditemukan: %s. Google Drive uploader disabled.",
+                self.config.drive_auth_file,
             )
             return
 
@@ -1474,14 +1474,30 @@ class GoogleDriveUploader(threading.Thread):
         self.logger.info("Google Drive uploader stopped.")
 
     def build_service(self):
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
+        import json
 
         scopes = ["https://www.googleapis.com/auth/drive.file"]
-        credentials = service_account.Credentials.from_service_account_file(
-            self.config.drive_service_account_file,
-            scopes=scopes,
-        )
+        
+        with open(self.config.drive_auth_file, "r") as f:
+            auth_data = json.load(f)
+            
+        if "type" in auth_data and auth_data["type"] == "service_account":
+            from google.oauth2 import service_account
+            credentials = service_account.Credentials.from_service_account_file(
+                self.config.drive_auth_file,
+                scopes=scopes,
+            )
+        else:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+            
+            credentials = Credentials.from_authorized_user_file(self.config.drive_auth_file, scopes)
+            if credentials and credentials.expired and credentials.refresh_token:
+                credentials.refresh(Request())
+                with open(self.config.drive_auth_file, "w") as f:
+                    f.write(credentials.to_json())
+
         return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
     def upload_ready_files(self) -> None:

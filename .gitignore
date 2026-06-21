@@ -1,6 +1,8 @@
 # Environment variables & secrets
 .env
 secrets/
+credentials.json
+generate_drive_token.py
 
 # Datasets & Outputs
 dataset/
