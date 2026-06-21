@@ -1427,7 +1427,8 @@ class GoogleDriveUploader(threading.Thread):
     DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
     MIME_TYPES = {
         ".ts": "video/mp2t",
-        ".mp4": "video/mp4"
+        ".mp4": "video/mp4",
+        ".csv": "text/csv"
     }
 
     def __init__(self, points: list[CCTVPoint], config: RuntimeConfig, stop_event: threading.Event):
@@ -1529,30 +1530,43 @@ class GoogleDriveUploader(threading.Thread):
         # Prioritize uploading encoded mp4s if they exist, otherwise raw videos
         encoded_dir = date_dir / point.name / "videos_encoded"
         raw_dir = date_dir / point.name / "videos"
+        metadata_dir = date_dir / point.name / "metadata"
         
-        files = self.ready_video_files(encoded_dir)
-        if not files:
-            files = self.ready_video_files(raw_dir)
+        video_files = self.ready_files(encoded_dir, ["*.ts", "*.mp4"])
+        if not video_files:
+            video_files = self.ready_files(raw_dir, ["*.ts", "*.mp4"])
             
-        if not files:
+        csv_files = self.ready_files(metadata_dir, ["*.csv"])
+            
+        if not video_files and not csv_files:
             return
 
         date_folder_id = self.ensure_drive_folder(self.config.drive_folder_id, date_dir.name)
         camera_folder_id = self.ensure_drive_folder(date_folder_id, point.name)
-        videos_folder_id = self.ensure_drive_folder(camera_folder_id, "videos")
 
-        for path in files:
-            if self.stop_event.is_set():
-                return
-            self.upload_file(path, videos_folder_id)
+        # Upload Videos
+        if video_files:
+            videos_folder_id = self.ensure_drive_folder(camera_folder_id, "videos")
+            for path in video_files:
+                if self.stop_event.is_set():
+                    return
+                self.upload_file(path, videos_folder_id)
 
-    def ready_video_files(self, target_dir: Path) -> list[Path]:
+        # Upload Metadata
+        if csv_files:
+            metadata_folder_id = self.ensure_drive_folder(camera_folder_id, "metadata")
+            for path in csv_files:
+                if self.stop_event.is_set():
+                    return
+                self.upload_file(path, metadata_folder_id)
+
+    def ready_files(self, target_dir: Path, extensions: list[str]) -> list[Path]:
         if not target_dir.exists():
             return []
 
         cutoff = time.time() - self.config.drive_safe_age_seconds
         files: list[Path] = []
-        for ext in ["*.ts", "*.mp4"]:
+        for ext in extensions:
             for path in sorted(target_dir.glob(ext)):
                 marker = self.upload_marker(path)
                 try:
