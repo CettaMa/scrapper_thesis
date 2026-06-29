@@ -4,6 +4,12 @@ services:
     image: cctv-scraper:latest
     container_name: cctv-scraper
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    extra_hosts:
+      - "atcs-dishubkbb.urbanaccess.net:103.151.226.229"
+      - "api.open-meteo.com:188.40.99.226"
     env_file:
       - .env
     environment:
