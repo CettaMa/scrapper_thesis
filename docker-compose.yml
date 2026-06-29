@@ -13,4 +13,4 @@ services:
     volumes:
       - ./dataset:/app/dataset
       - ./cctv_points.csv:/app/cctv_points.csv:ro
-      - ./secrets:/app/secrets:ro
+      - ./secrets:/app/secrets

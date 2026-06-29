@@ -1564,9 +1564,13 @@ class GoogleDriveUploader(threading.Thread):
         if not target_dir.exists():
             return []
 
-        cutoff = time.time() - self.config.drive_safe_age_seconds
         files: list[Path] = []
         for ext in extensions:
+            if ext == "*.csv" or ext == ".csv":
+                cutoff = time.time() - 86400  # 24 hours safe age for CSV
+            else:
+                cutoff = time.time() - self.config.drive_safe_age_seconds
+                
             for path in sorted(target_dir.glob(ext)):
                 marker = self.upload_marker(path)
                 try:

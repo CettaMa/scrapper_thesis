@@ -6,6 +6,7 @@ generate_drive_token.py
 
 # Datasets & Outputs
 dataset/
+metadata_e/
 
 # Python caching
 __pycache__/
