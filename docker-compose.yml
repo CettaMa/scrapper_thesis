@@ -10,6 +10,7 @@ services:
     extra_hosts:
       - "atcs-dishubkbb.urbanaccess.net:103.151.226.229"
       - "api.open-meteo.com:188.40.99.226"
+      - "api.tomtom.com:51.105.97.224"
     env_file:
       - .env
     environment:
