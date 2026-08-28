@@ -7,34 +7,29 @@ from unittest.mock import patch
 import pytest
 
 from cctv_scraper import (
+    ArchiveConfig,
     ArchiveEncoder,
     CCTVPoint,
     CCTVRecorder,
+    DriveConfig,
     GoogleDriveUploader,
+    MetadataConfig,
+    NetworkConfig,
+    RecorderConfig,
     RuntimeConfig,
+    StorageConfig,
     load_cctv_points,
     parse_coordinate,
 )
 
 
 def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
-    defaults: dict[str, Any] = dict(
-        config_file=output_root / "cctv_points.csv",
-        output_root=output_root,
+    recorder_defaults: dict[str, Any] = dict(
         segment_seconds=60,
+        video_container="ts",
         restart_delay_seconds=5,
         health_check_seconds=30,
         stale_file_seconds=240,
-        metadata_interval_seconds=60,
-        tomtom_interval_seconds=300,
-        openmeteo_interval_seconds=60,
-        disk_check_seconds=300,
-        retention_days=7,
-        min_free_space_gb=20.0,
-        tomtom_api_key=None,
-        default_lat=-6.851117,
-        default_lon=107.496586,
-        video_container="ts",
         ffmpeg_loglevel="warning",
         ffmpeg_transport_mode="copy",
         ffmpeg_user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -50,36 +45,113 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
         ffmpeg_reconnect_on_http_error="5xx",
         output_fps=10,
         transcode_preset="p4",
-        transcode_crf="25",
         segment_keyframe_seconds=2,
         video_encoder="hevc_nvenc",
         target_bitrate="650k",
         max_bitrate="900k",
         buffer_size="1300k",
         output_height=0,
-        archive_encoder_enabled=True,
-        archive_interval_seconds=300,
-        archive_scan_seconds=60,
-        archive_safe_age_seconds=90,
-        archive_delete_raw_after_success=True,
-        archive_video_encoder="hevc_nvenc",
-        archive_preset="p4",
-        archive_target_bitrate="650k",
-        archive_max_bitrate="900k",
-        archive_buffer_size="1300k",
-        archive_output_height=0,
-        drive_upload_enabled=False,
-        drive_auth_file=output_root / "secrets" / "token.json",
-        drive_folder_id="",
-        drive_scan_seconds=60,
-        drive_safe_age_seconds=90,
-        drive_delete_local_after_upload=False,
+    )
+    metadata_defaults: dict[str, Any] = dict(
+        metadata_interval_seconds=60,
+        tomtom_interval_seconds=300,
+        openmeteo_interval_seconds=60,
+        default_lat=-6.851117,
+        default_lon=107.496586,
+        tomtom_api_key=None,
+    )
+    archive_defaults: dict[str, Any] = dict(
+        enabled=True,
+        interval_seconds=300,
+        scan_seconds=60,
+        safe_age_seconds=90,
+        delete_raw_after_success=True,
+        video_encoder="hevc_nvenc",
+        preset="p4",
+        target_bitrate="650k",
+        max_bitrate="900k",
+        buffer_size="1300k",
+        output_height=0,
+    )
+    drive_defaults: dict[str, Any] = dict(
+        enabled=False,
+        auth_file=output_root / "secrets" / "token.json",
+        folder_id="",
+        scan_seconds=60,
+        safe_age_seconds=90,
+        delete_local_after_upload=False,
+    )
+    storage_defaults: dict[str, Any] = dict(
+        output_root=output_root,
+        retention_days=7,
+        min_free_space_gb=20.0,
+        disk_check_seconds=300,
+    )
+    network_defaults: dict[str, Any] = dict(
         preflight_check=True,
         offline_retry_seconds=300,
         network_retry_seconds=60,
     )
-    defaults.update(kwargs)
-    return RuntimeConfig(**defaults)
+
+    config_file = kwargs.pop("config_file", output_root / "cctv_points.csv")
+
+    for k, v in kwargs.items():
+        if k in recorder_defaults:
+            recorder_defaults[k] = v
+        elif k in metadata_defaults:
+            metadata_defaults[k] = v
+        elif k in archive_defaults:
+            archive_defaults[k] = v
+        elif k == "archive_encoder_enabled":
+            archive_defaults["enabled"] = v
+        elif k == "archive_interval_seconds":
+            archive_defaults["interval_seconds"] = v
+        elif k == "archive_scan_seconds":
+            archive_defaults["scan_seconds"] = v
+        elif k == "archive_safe_age_seconds":
+            archive_defaults["safe_age_seconds"] = v
+        elif k == "archive_delete_raw_after_success":
+            archive_defaults["delete_raw_after_success"] = v
+        elif k == "archive_video_encoder":
+            archive_defaults["video_encoder"] = v
+        elif k == "archive_preset":
+            archive_defaults["preset"] = v
+        elif k == "archive_target_bitrate":
+            archive_defaults["target_bitrate"] = v
+        elif k == "archive_max_bitrate":
+            archive_defaults["max_bitrate"] = v
+        elif k == "archive_buffer_size":
+            archive_defaults["buffer_size"] = v
+        elif k == "archive_output_height":
+            archive_defaults["output_height"] = v
+        elif k in drive_defaults:
+            drive_defaults[k] = v
+        elif k == "drive_upload_enabled":
+            drive_defaults["enabled"] = v
+        elif k == "drive_auth_file":
+            drive_defaults["auth_file"] = v
+        elif k == "drive_folder_id":
+            drive_defaults["folder_id"] = v
+        elif k == "drive_scan_seconds":
+            drive_defaults["scan_seconds"] = v
+        elif k == "drive_safe_age_seconds":
+            drive_defaults["safe_age_seconds"] = v
+        elif k == "drive_delete_local_after_upload":
+            drive_defaults["delete_local_after_upload"] = v
+        elif k in storage_defaults:
+            storage_defaults[k] = v
+        elif k in network_defaults:
+            network_defaults[k] = v
+
+    return RuntimeConfig(
+        config_file=config_file,
+        recorder=RecorderConfig(**recorder_defaults),
+        metadata=MetadataConfig(**metadata_defaults),
+        archive=ArchiveConfig(**archive_defaults),
+        drive=DriveConfig(**drive_defaults),
+        storage=StorageConfig(**storage_defaults),
+        network=NetworkConfig(**network_defaults),
+    )
 
 
 # ============================================================================

@@ -77,7 +77,6 @@ class CCTVApp:
         )
         logging.info("Output FPS: %s", self.config.output_fps)
         logging.info("Transcode preset: %s", self.config.transcode_preset)
-        logging.info("Transcode CRF/CQ compatibility value: %s", self.config.transcode_crf)
         logging.info("Video encoder: %s", self.config.video_encoder)
         logging.info("Target bitrate: %s", self.config.target_bitrate)
         logging.info("Maximum bitrate: %s", self.config.max_bitrate)
