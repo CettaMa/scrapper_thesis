@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+from typing import Any
 
 import requests
 import urllib3.util.connection
@@ -10,9 +11,18 @@ from urllib3.util.connection import create_connection as _orig_create_connection
 class DoHResolver:
     """Resolve hostnames via Cloudflare DNS-over-HTTPS when system DNS fails."""
 
-    _cache: dict[str, tuple[str, float]] = {}
+    _cache: dict[str, tuple[str | None, float]] = {}
     _ttl = 300  # cache for 5 minutes
+    _max_cache_size = 256
     _lock = threading.Lock()
+
+    @classmethod
+    def _set_cache(cls, hostname: str, ip: str | None) -> None:
+        """Store lookup result with FIFO eviction if cache size exceeds limit."""
+        if len(cls._cache) >= cls._max_cache_size and hostname not in cls._cache:
+            first_key = next(iter(cls._cache))
+            cls._cache.pop(first_key, None)
+        cls._cache[hostname] = (ip, time.time())
 
     @classmethod
     def resolve(cls, hostname: str) -> str | None:
@@ -23,7 +33,10 @@ class DoHResolver:
 
         try:
             socket.getaddrinfo(hostname, 443, socket.AF_INET)
-            return None  # system DNS works, no override needed
+            # System DNS works -> cache negative result (None) so we don't re-query
+            with cls._lock:
+                cls._set_cache(hostname, None)
+            return None
         except socket.gaierror:
             pass
 
@@ -38,23 +51,36 @@ class DoHResolver:
                 if answer.get("type") == 1:
                     ip = answer["data"]
                     with cls._lock:
-                        cls._cache[hostname] = (ip, time.time())
+                        cls._set_cache(hostname, ip)
                     return ip
         except Exception:
             pass
+
+        # If resolution fails, cache negative result for TTL to avoid repeated slow timeouts
+        with cls._lock:
+            cls._set_cache(hostname, None)
         return None
 
 
 _doh_patched_hosts: dict[str, str] = {}
+_doh_lock = threading.Lock()
+_MAX_PATCHED_HOSTS = 256
 
 
-def _doh_create_connection(address, *args, **kwargs):
+def _doh_create_connection(address: tuple[str, int], *args: Any, **kwargs: Any) -> Any:
     host, port = address
-    ip = _doh_patched_hosts.get(host)
+    with _doh_lock:
+        ip = _doh_patched_hosts.get(host)
+
     if not ip:
         ip = DoHResolver.resolve(host)
         if ip:
-            _doh_patched_hosts[host] = ip
+            with _doh_lock:
+                if len(_doh_patched_hosts) >= _MAX_PATCHED_HOSTS and host not in _doh_patched_hosts:
+                    first_key = next(iter(_doh_patched_hosts))
+                    _doh_patched_hosts.pop(first_key, None)
+                _doh_patched_hosts[host] = ip
+
     if ip:
         return _orig_create_connection((ip, port), *args, **kwargs)
     return _orig_create_connection(address, *args, **kwargs)

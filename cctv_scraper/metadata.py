@@ -19,11 +19,11 @@ class MetadataCollector(threading.Thread):
     """
     Mengambil metadata eksternal per titik.
 
-    v4:
     - TomTom dipanggil default setiap 300 detik / 5 menit.
     - Open-Meteo dipanggil default setiap 60 detik.
     - CSV metadata tetap ditulis setiap METADATA_INTERVAL_SECONDS.
     - Jika belum waktunya call ulang, nilai terakhir dipakai kembali dan diberi status cached.
+    - Memegang satu requests.Session selama masa hidup thread untuk connection pooling & HTTP keep-alive.
     """
 
     def __init__(self, points: list[CCTVPoint], config: RuntimeConfig, stop_event: threading.Event):
@@ -49,20 +49,24 @@ class MetadataCollector(threading.Thread):
             "Open-Meteo API interval: %s seconds", self.config.openmeteo_interval_seconds
         )
 
-        while not self.stop_event.is_set():
-            start = time.time()
-            timestamp = now_local()
+        session = requests.Session()
+        try:
+            while not self.stop_event.is_set():
+                start = time.time()
+                timestamp = now_local()
 
-            for point in self.points:
-                try:
-                    metadata = self.collect_point_metadata(point, timestamp)
-                    self.write_metadata(point, metadata)
-                except Exception as exc:
-                    self.logger.exception("Metadata failed for %s: %s", point.name, exc)
+                for point in self.points:
+                    try:
+                        metadata = self.collect_point_metadata(session, point, timestamp)
+                        self.write_metadata(point, metadata)
+                    except Exception as exc:
+                        self.logger.exception("Metadata failed for %s: %s", point.name, exc)
 
-            elapsed = time.time() - start
-            sleep_time = max(0, self.config.metadata_interval_seconds - elapsed)
-            self.stop_event.wait(sleep_time)
+                elapsed = time.time() - start
+                sleep_time = max(0, self.config.metadata_interval_seconds - elapsed)
+                self.stop_event.wait(sleep_time)
+        finally:
+            session.close()
 
         self.logger.info("Metadata collector stopped.")
 
@@ -74,10 +78,11 @@ class MetadataCollector(threading.Thread):
 
         return (time.time() - last_fetch[cache_key]) >= interval_seconds
 
-    def collect_point_metadata(self, point: CCTVPoint, timestamp: datetime) -> dict:
-        with requests.Session() as session:
-            tomtom = self.get_tomtom_cached(session, point)
-            weather = self.get_openmeteo_cached(session, point)
+    def collect_point_metadata(
+        self, session: requests.Session, point: CCTVPoint, timestamp: datetime
+    ) -> dict:
+        tomtom = self.get_tomtom_cached(session, point)
+        weather = self.get_openmeteo_cached(session, point)
 
         row = {
             "cctv_name": point.name,
