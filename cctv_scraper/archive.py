@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from cctv_scraper.config import CCTVPoint, RuntimeConfig, ensure_dir
+from cctv_scraper.storage_scan import iter_point_date_dirs, ready_files, trim_stderr
 
 
 class ArchiveEncoder(threading.Thread):
@@ -41,23 +42,10 @@ class ArchiveEncoder(threading.Thread):
                 self.encode_point_date(point, date_dir)
 
     def date_dirs_for_point(self, point: CCTVPoint) -> list[Path]:
-        if not self.config.output_root.exists():
-            return []
+        return iter_point_date_dirs(self.config.output_root, point)
 
-        dirs: list[Path] = []
-        for child in self.config.output_root.iterdir():
-            if not child.is_dir():
-                continue
-            try:
-                datetime.strptime(child.name, "%Y-%m-%d")
-            except ValueError:
-                continue
-
-            point_dir = child / point.name
-            if (point_dir / "videos").exists():
-                dirs.append(child)
-
-        return sorted(dirs)
+    def ready_raw_files(self, raw_dir: Path) -> list[Path]:
+        return ready_files(raw_dir, [".ts"], self.config.archive_safe_age_seconds)
 
     def encode_point_date(self, point: CCTVPoint, date_dir: Path) -> None:
         raw_dir = date_dir / point.name / "videos"
@@ -81,23 +69,6 @@ class ArchiveEncoder(threading.Thread):
             if self.stop_event.is_set():
                 return
             self.encode_batch(point, encoded_dir, window_start, sorted(batch))
-
-    def ready_raw_files(self, raw_dir: Path) -> list[Path]:
-        if not raw_dir.exists():
-            return []
-
-        cutoff = time.time() - self.config.archive_safe_age_seconds
-        files: list[Path] = []
-        for path in raw_dir.glob("*.ts"):
-            try:
-                if path.stat().st_size <= 0:
-                    continue
-                if path.stat().st_mtime > cutoff:
-                    continue
-                files.append(path)
-            except FileNotFoundError:
-                continue
-        return files
 
     def encode_batch(
         self, point: CCTVPoint, encoded_dir: Path, window_start: int, files: list[Path]
@@ -143,7 +114,7 @@ class ArchiveEncoder(threading.Thread):
                     "Archive encode failed for %s | code=%s | stderr=%s",
                     output,
                     result.returncode,
-                    self.trim_stderr(result.stderr),
+                    trim_stderr(result.stderr),
                 )
                 return
 
@@ -254,7 +225,3 @@ class ArchiveEncoder(threading.Thread):
                 self.logger.warning("Failed deleting raw segment %s: %s", path, exc)
 
         self.logger.info("Deleted %s raw segments after archive encode.", deleted)
-
-    def trim_stderr(self, stderr: str, max_lines: int = 12) -> str:
-        lines = (stderr or "").splitlines()
-        return " | ".join(lines[-max_lines:])

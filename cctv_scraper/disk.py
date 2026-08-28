@@ -1,9 +1,12 @@
 import logging
+import os
 import shutil
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
+from pathlib import Path
 
 from cctv_scraper.config import RuntimeConfig, ensure_dir, now_local
+from cctv_scraper.storage_scan import parse_date_dir_name
 
 
 class DiskMonitor(threading.Thread):
@@ -47,18 +50,19 @@ class DiskMonitor(threading.Thread):
         if not self.config.output_root.exists():
             return
 
-        for child in self.config.output_root.iterdir():
-            if not child.is_dir():
-                continue
+        try:
+            with os.scandir(self.config.output_root) as it:
+                for entry in it:
+                    if not entry.is_dir() or entry.name in {"logs", "status"}:
+                        continue
 
-            if child.name == "logs":
-                continue
+                    folder_date = parse_date_dir_name(entry.name)
+                    if folder_date is None:
+                        continue
 
-            try:
-                folder_date = datetime.strptime(child.name, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-
-            if folder_date < cutoff_date:
-                self.logger.warning("Deleting old footage folder: %s", child)
-                shutil.rmtree(child, ignore_errors=True)
+                    if folder_date < cutoff_date:
+                        target = Path(entry.path)
+                        self.logger.warning("Deleting old footage folder: %s", target)
+                        shutil.rmtree(target, ignore_errors=True)
+        except OSError as exc:
+            self.logger.warning("Error during disk cleanup scan: %s", exc)

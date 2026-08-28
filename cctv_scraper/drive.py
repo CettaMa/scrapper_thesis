@@ -1,12 +1,11 @@
 import json
 import logging
 import threading
-import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from cctv_scraper.config import CCTVPoint, RuntimeConfig, now_local
+from cctv_scraper.storage_scan import iter_point_date_dirs, ready_files
 
 
 class GoogleDriveUploader(threading.Thread):
@@ -91,22 +90,7 @@ class GoogleDriveUploader(threading.Thread):
                 self.upload_point_date(point, date_dir)
 
     def date_dirs_for_point(self, point: CCTVPoint) -> list[Path]:
-        if not self.config.output_root.exists():
-            return []
-
-        dirs: list[Path] = []
-        for child in self.config.output_root.iterdir():
-            if not child.is_dir():
-                continue
-            try:
-                datetime.strptime(child.name, "%Y-%m-%d")
-            except ValueError:
-                continue
-
-            if (child / point.name / "videos").exists():
-                dirs.append(child)
-
-        return sorted(dirs)
+        return iter_point_date_dirs(self.config.output_root, point)
 
     def upload_point_date(self, point: CCTVPoint, date_dir: Path) -> None:
         # Prioritize uploading encoded mp4s if they exist, otherwise raw videos
@@ -143,29 +127,12 @@ class GoogleDriveUploader(threading.Thread):
                 self.upload_file(path, metadata_folder_id)
 
     def ready_files(self, target_dir: Path, extensions: list[str]) -> list[Path]:
-        if not target_dir.exists():
-            return []
-
-        files: list[Path] = []
-        for ext in extensions:
-            if ext in {"*.csv", ".csv"}:
-                cutoff = time.time() - 86400  # 24 hours safe age for CSV
-            else:
-                cutoff = time.time() - self.config.drive_safe_age_seconds
-
-            for path in sorted(target_dir.glob(ext)):
-                marker = self.upload_marker(path)
-                try:
-                    if marker.exists():
-                        continue
-                    if path.stat().st_size <= 0:
-                        continue
-                    if path.stat().st_mtime > cutoff:
-                        continue
-                    files.append(path)
-                except FileNotFoundError:
-                    continue
-        return sorted(files)
+        age_map = {
+            ".csv": 86400.0,
+            ".ts": float(self.config.drive_safe_age_seconds),
+            ".mp4": float(self.config.drive_safe_age_seconds),
+        }
+        return ready_files(target_dir, extensions, age_map, skip_marker=".uploaded")
 
     def upload_file(self, path: Path, parent_id: str) -> None:
         from googleapiclient.http import MediaFileUpload

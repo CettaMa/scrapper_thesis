@@ -412,35 +412,58 @@ class CCTVRecorder(threading.Thread):
 
             self.stop_event.wait(self.config.health_check_seconds)
 
-    def latest_video_file(self) -> Path | None:
+    def get_latest_video_stat(self) -> tuple[Path, os.stat_result] | None:
         video_root = self.current_video_dir()
-
         if not video_root.exists():
             return None
 
-        ext = self.output_extension()
-        candidates = list(video_root.glob(f"{self.point.name}_*.{ext}"))
+        ext = f".{self.output_extension()}"
+        prefix = f"{self.point.name}_"
+        start_ts = (
+            (self.last_restart_at.timestamp() - 5) if self.last_restart_at is not None else None
+        )
 
-        # Jangan mengevaluasi segment lama dari sesi recorder sebelumnya.
-        if self.last_restart_at is not None:
-            start_ts = self.last_restart_at.timestamp() - 5
-            candidates = [p for p in candidates if p.exists() and p.stat().st_mtime >= start_ts]
+        latest_path: Path | None = None
+        latest_stat: os.stat_result | None = None
 
-        if not candidates:
+        try:
+            with os.scandir(video_root) as it:
+                for entry in it:
+                    if not entry.is_file():
+                        continue
+                    name = entry.name
+                    if not (name.startswith(prefix) and name.endswith(ext)):
+                        continue
+                    try:
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    if start_ts is not None and st.st_mtime < start_ts:
+                        continue
+                    if latest_stat is None or st.st_mtime > latest_stat.st_mtime:
+                        latest_path = Path(entry.path)
+                        latest_stat = st
+        except OSError:
             return None
 
-        return max(candidates, key=lambda p: p.stat().st_mtime)
+        if latest_path is not None and latest_stat is not None:
+            return latest_path, latest_stat
+        return None
+
+    def latest_video_file(self) -> Path | None:
+        res = self.get_latest_video_stat()
+        return res[0] if res is not None else None
 
     def is_video_stale(self) -> bool:
-        latest = self.latest_video_file()
+        res = self.get_latest_video_stat()
 
-        if latest is None:
+        if res is None:
             if self.last_restart_at is None:
                 return False
             age_since_restart = (now_local() - self.last_restart_at).total_seconds()
             return age_since_restart > self.config.stale_file_seconds
 
-        stat = latest.stat()
+        latest, stat = res
         age = time.time() - stat.st_mtime
 
         # Jangan menilai file yang sedang aktif ditulis.
