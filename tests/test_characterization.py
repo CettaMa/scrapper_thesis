@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from main import (
+from cctv_scraper import (
     ArchiveEncoder,
     CCTVPoint,
     CCTVRecorder,
