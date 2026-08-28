@@ -1,25 +1,26 @@
 import argparse
 import csv
+import json
 import logging
 import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import IO, Any
 from urllib.parse import urlparse
 
 import requests
+import urllib3.util.connection
 from dotenv import load_dotenv
 from urllib3.util.connection import create_connection as _orig_create_connection
-import socket
-import json
 
 
 # =========================================================
@@ -33,7 +34,7 @@ class DoHResolver:
     _lock = threading.Lock()
 
     @classmethod
-    def resolve(cls, hostname: str) -> Optional[str]:
+    def resolve(cls, hostname: str) -> str | None:
         with cls._lock:
             cached = cls._cache.get(hostname)
             if cached and time.time() - cached[1] < cls._ttl:
@@ -78,7 +79,6 @@ def _doh_create_connection(address, *args, **kwargs):
     return _orig_create_connection(address, *args, **kwargs)
 
 
-import urllib3.util.connection
 urllib3.util.connection.create_connection = _doh_create_connection
 
 
@@ -132,7 +132,7 @@ class RuntimeConfig:
     disk_check_seconds: int
     retention_days: int
     min_free_space_gb: float
-    tomtom_api_key: Optional[str]
+    tomtom_api_key: str | None
     default_lat: float
     default_lon: float
 
@@ -289,18 +289,13 @@ def setup_logging(output_root: Path) -> None:
     for handler in list(root_logger.handlers):
         root_logger.removeHandler(handler)
 
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(threadName)s | %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(threadName)s | %(message)s")
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
     root_logger.addHandler(stream_handler)
 
-    file_handler = logging.FileHandler(
-        output_root / "logs" / "scraper.log",
-        encoding="utf-8"
-    )
+    file_handler = logging.FileHandler(output_root / "logs" / "scraper.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
 
@@ -373,9 +368,13 @@ def load_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
         restart_delay_seconds=env_int("RESTART_DELAY_SECONDS", DEFAULT_RESTART_DELAY_SECONDS),
         health_check_seconds=env_int("HEALTH_CHECK_SECONDS", DEFAULT_HEALTH_CHECK_SECONDS),
         stale_file_seconds=env_int("STALE_FILE_SECONDS", DEFAULT_STALE_FILE_SECONDS),
-        metadata_interval_seconds=env_int("METADATA_INTERVAL_SECONDS", DEFAULT_METADATA_INTERVAL_SECONDS),
+        metadata_interval_seconds=env_int(
+            "METADATA_INTERVAL_SECONDS", DEFAULT_METADATA_INTERVAL_SECONDS
+        ),
         tomtom_interval_seconds=env_int("TOMTOM_INTERVAL_SECONDS", DEFAULT_TOMTOM_INTERVAL_SECONDS),
-        openmeteo_interval_seconds=env_int("OPENMETEO_INTERVAL_SECONDS", DEFAULT_OPENMETEO_INTERVAL_SECONDS),
+        openmeteo_interval_seconds=env_int(
+            "OPENMETEO_INTERVAL_SECONDS", DEFAULT_OPENMETEO_INTERVAL_SECONDS
+        ),
         disk_check_seconds=env_int("DISK_CHECK_SECONDS", DEFAULT_DISK_CHECK_SECONDS),
         retention_days=retention_days,
         min_free_space_gb=min_free_space_gb,
@@ -445,7 +444,9 @@ def load_cctv_points(config: RuntimeConfig) -> list[CCTVPoint]:
         sample = f.read(2048)
         f.seek(0)
 
-        has_header = "name" in sample.lower() and ("url" in sample.lower() or "link" in sample.lower())
+        has_header = "name" in sample.lower() and (
+            "url" in sample.lower() or "link" in sample.lower()
+        )
 
         if has_header:
             reader = csv.DictReader(f)
@@ -474,13 +475,13 @@ def load_cctv_points(config: RuntimeConfig) -> list[CCTVPoint]:
                     )
                 )
         else:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) < 2:
+            csv_reader = csv.reader(f)
+            for raw_row in csv_reader:
+                if len(raw_row) < 2:
                     continue
 
-                name = row[0].strip()
-                url = row[1].strip()
+                name = raw_row[0].strip()
+                url = raw_row[1].strip()
 
                 if not name or not url:
                     continue
@@ -525,11 +526,11 @@ class CCTVRecorder(threading.Thread):
         self.point = point
         self.config = config
         self.stop_event = stop_event
-        self.process: Optional[subprocess.Popen] = None
+        self.process: subprocess.Popen | None = None
         self.logger = point_logger(config.output_root, point.name)
-        self.last_restart_at: Optional[datetime] = None
-        self.process_start_date: Optional[datetime.date] = None
-        self.ffmpeg_stderr_file = None
+        self.last_restart_at: datetime | None = None
+        self.process_start_date: date | None = None
+        self.ffmpeg_stderr_file: IO[str] | None = None
         self._ffmpeg_self_exited = False
 
     def run(self) -> None:
@@ -543,7 +544,7 @@ class CCTVRecorder(threading.Thread):
                     "Preflight failed for %s | reason=%s | http_status=%s",
                     self.point.name,
                     reason,
-                    http_status or "-"
+                    http_status or "-",
                 )
                 self.sleep_after_preflight_failure(reason)
                 continue
@@ -565,7 +566,7 @@ class CCTVRecorder(threading.Thread):
                 else:
                     self.logger.warning(
                         "FFmpeg stopped or unhealthy. Restarting in %s seconds.",
-                        self.config.restart_delay_seconds
+                        self.config.restart_delay_seconds,
                     )
                     self.stop_event.wait(self.config.restart_delay_seconds)
 
@@ -576,7 +577,9 @@ class CCTVRecorder(threading.Thread):
         return now_local().strftime("%Y-%m-%d")
 
     def current_video_dir(self) -> Path:
-        video_dir = self.config.output_root / self.current_date_folder() / self.point.name / "videos"
+        video_dir = (
+            self.config.output_root / self.current_date_folder() / self.point.name / "videos"
+        )
         ensure_dir(video_dir)
         return video_dir
 
@@ -604,10 +607,7 @@ class CCTVRecorder(threading.Thread):
         return headers
 
     def ffmpeg_headers_arg(self) -> str:
-        return "".join(
-            f"{key}: {value}\r\n"
-            for key, value in self.input_headers().items()
-        )
+        return "".join(f"{key}: {value}\r\n" for key, value in self.input_headers().items())
 
     def build_ffmpeg_command(self) -> list[str]:
         output_pattern = self.build_output_pattern()
@@ -615,23 +615,37 @@ class CCTVRecorder(threading.Thread):
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", self.config.ffmpeg_loglevel,
-
+            "-loglevel",
+            self.config.ffmpeg_loglevel,
             # Input stability for unstable HLS CCTV streams.
-            "-fflags", "+genpts+discardcorrupt+nobuffer",
-            "-err_detect", "ignore_err",
-            "-rw_timeout", self.config.ffmpeg_rw_timeout,
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_on_network_error", "1",
-            "-reconnect_on_http_error", self.config.ffmpeg_reconnect_on_http_error,
-            "-reconnect_delay_max", self.config.ffmpeg_reconnect_delay_max,
-            "-http_persistent", "0",
-            "-multiple_requests", "0",
-            "-user_agent", self.config.ffmpeg_user_agent,
-            "-headers", self.ffmpeg_headers_arg(),
-            "-analyzeduration", self.config.ffmpeg_analyzeduration,
-            "-probesize", self.config.ffmpeg_probesize,
+            "-fflags",
+            "+genpts+discardcorrupt+nobuffer",
+            "-err_detect",
+            "ignore_err",
+            "-rw_timeout",
+            self.config.ffmpeg_rw_timeout,
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_on_network_error",
+            "1",
+            "-reconnect_on_http_error",
+            self.config.ffmpeg_reconnect_on_http_error,
+            "-reconnect_delay_max",
+            self.config.ffmpeg_reconnect_delay_max,
+            "-http_persistent",
+            "0",
+            "-multiple_requests",
+            "0",
+            "-user_agent",
+            self.config.ffmpeg_user_agent,
+            "-headers",
+            self.ffmpeg_headers_arg(),
+            "-analyzeduration",
+            self.config.ffmpeg_analyzeduration,
+            "-probesize",
+            self.config.ffmpeg_probesize,
         ]
 
         if self.config.hls_reconnect_at_eof:
@@ -657,30 +671,43 @@ class CCTVRecorder(threading.Thread):
 
             encoder = self.config.video_encoder
             cmd += [
-                "-map", "0:v:0",
+                "-map",
+                "0:v:0",
                 "-an",
-                "-vf", ",".join(filters),
-                "-fps_mode", "cfr",
-                "-c:v", encoder,
+                "-vf",
+                ",".join(filters),
+                "-fps_mode",
+                "cfr",
+                "-c:v",
+                encoder,
             ]
 
             if encoder in {"h264_nvenc", "hevc_nvenc"}:
                 cmd += [
-                    "-preset", self.config.transcode_preset,
-                    "-rc:v", "vbr",
-                    "-b:v", self.config.target_bitrate,
-                    "-maxrate:v", self.config.max_bitrate,
-                    "-bufsize:v", self.config.buffer_size,
+                    "-preset",
+                    self.config.transcode_preset,
+                    "-rc:v",
+                    "vbr",
+                    "-b:v",
+                    self.config.target_bitrate,
+                    "-maxrate:v",
+                    self.config.max_bitrate,
+                    "-bufsize:v",
+                    self.config.buffer_size,
                 ]
             elif encoder in {"libx264", "libx265"}:
                 cpu_preset = self.config.transcode_preset
                 if cpu_preset.startswith("p") and cpu_preset[1:].isdigit():
                     cpu_preset = "veryfast"
                 cmd += [
-                    "-preset", cpu_preset,
-                    "-b:v", self.config.target_bitrate,
-                    "-maxrate:v", self.config.max_bitrate,
-                    "-bufsize:v", self.config.buffer_size,
+                    "-preset",
+                    cpu_preset,
+                    "-b:v",
+                    self.config.target_bitrate,
+                    "-maxrate:v",
+                    self.config.max_bitrate,
+                    "-bufsize:v",
+                    self.config.buffer_size,
                 ]
             else:
                 raise ValueError(
@@ -689,9 +716,12 @@ class CCTVRecorder(threading.Thread):
                 )
 
             cmd += [
-                "-g", str(gop),
-                "-keyint_min", str(gop),
-                "-sc_threshold", "0",
+                "-g",
+                str(gop),
+                "-keyint_min",
+                str(gop),
+                "-sc_threshold",
+                "0",
             ]
         else:
             # Recommended raw recording mode: no decode/transcode.
@@ -701,10 +731,14 @@ class CCTVRecorder(threading.Thread):
         cmd += ["-max_muxing_queue_size", "1024"]
 
         cmd += [
-            "-f", "segment",
-            "-segment_time", str(self.config.segment_seconds),
-            "-reset_timestamps", "1",
-            "-strftime", "1",
+            "-f",
+            "segment",
+            "-segment_time",
+            str(self.config.segment_seconds),
+            "-reset_timestamps",
+            "1",
+            "-strftime",
+            "1",
         ]
 
         # Disabled by default. When enabled, FFmpeg cuts on wall-clock boundaries,
@@ -714,8 +748,10 @@ class CCTVRecorder(threading.Thread):
 
         if self.config.video_container == "mp4":
             cmd += [
-                "-segment_format", "mp4",
-                "-movflags", "+faststart",
+                "-segment_format",
+                "mp4",
+                "-movflags",
+                "+faststart",
             ]
         else:
             cmd += ["-segment_format", "mpegts"]
@@ -808,16 +844,12 @@ class CCTVRecorder(threading.Thread):
         if "not_found" in reason or "forbidden" in reason or "unauthorized" in reason:
             delay = self.config.offline_retry_seconds
             self.logger.warning(
-                "Stream URL looks offline/expired: %s. Retrying in %s seconds.",
-                reason,
-                delay
+                "Stream URL looks offline/expired: %s. Retrying in %s seconds.", reason, delay
             )
         else:
             delay = self.config.network_retry_seconds
             self.logger.warning(
-                "Stream network/server issue: %s. Retrying in %s seconds.",
-                reason,
-                delay
+                "Stream network/server issue: %s. Retrying in %s seconds.", reason, delay
             )
 
         self.stop_event.wait(delay)
@@ -848,7 +880,7 @@ class CCTVRecorder(threading.Thread):
             command,
             stdout=subprocess.DEVNULL,
             stderr=self.ffmpeg_stderr_file,
-            creationflags=creationflags
+            creationflags=creationflags,
         )
 
     def monitor_ffmpeg(self) -> None:
@@ -873,7 +905,7 @@ class CCTVRecorder(threading.Thread):
             if self.is_video_stale():
                 self.logger.warning(
                     "No recent valid video file detected in the last %s seconds.",
-                    self.config.stale_file_seconds
+                    self.config.stale_file_seconds,
                 )
                 self.log_recent_ffmpeg_stderr()
                 self.stop_ffmpeg()
@@ -881,7 +913,7 @@ class CCTVRecorder(threading.Thread):
 
             self.stop_event.wait(self.config.health_check_seconds)
 
-    def latest_video_file(self) -> Optional[Path]:
+    def latest_video_file(self) -> Path | None:
         video_root = self.current_video_dir()
 
         if not video_root.exists():
@@ -893,10 +925,7 @@ class CCTVRecorder(threading.Thread):
         # Jangan mengevaluasi segment lama dari sesi recorder sebelumnya.
         if self.last_restart_at is not None:
             start_ts = self.last_restart_at.timestamp() - 5
-            candidates = [
-                p for p in candidates
-                if p.exists() and p.stat().st_mtime >= start_ts
-            ]
+            candidates = [p for p in candidates if p.exists() and p.stat().st_mtime >= start_ts]
 
         if not candidates:
             return None
@@ -995,9 +1024,13 @@ class MetadataCollector(threading.Thread):
 
     def run(self) -> None:
         self.logger.info("Metadata collector started.")
-        self.logger.info("Metadata CSV write interval: %s seconds", self.config.metadata_interval_seconds)
+        self.logger.info(
+            "Metadata CSV write interval: %s seconds", self.config.metadata_interval_seconds
+        )
         self.logger.info("TomTom API interval: %s seconds", self.config.tomtom_interval_seconds)
-        self.logger.info("Open-Meteo API interval: %s seconds", self.config.openmeteo_interval_seconds)
+        self.logger.info(
+            "Open-Meteo API interval: %s seconds", self.config.openmeteo_interval_seconds
+        )
 
         while not self.stop_event.is_set():
             start = time.time()
@@ -1016,7 +1049,9 @@ class MetadataCollector(threading.Thread):
 
         self.logger.info("Metadata collector stopped.")
 
-    def should_fetch(self, cache_key: str, last_fetch: dict[str, float], interval_seconds: int) -> bool:
+    def should_fetch(
+        self, cache_key: str, last_fetch: dict[str, float], interval_seconds: int
+    ) -> bool:
         if cache_key not in last_fetch:
             return True
 
@@ -1045,7 +1080,9 @@ class MetadataCollector(threading.Thread):
     def get_tomtom_cached(self, session: requests.Session, point: CCTVPoint) -> dict:
         cache_key = point.name
 
-        if self.should_fetch(cache_key, self.tomtom_last_fetch, self.config.tomtom_interval_seconds):
+        if self.should_fetch(
+            cache_key, self.tomtom_last_fetch, self.config.tomtom_interval_seconds
+        ):
             data = self.get_tomtom(session, point)
             data["traffic_cache_status"] = "fresh"
             data["traffic_last_api_call"] = now_local().strftime("%Y-%m-%d %H:%M:%S")
@@ -1071,7 +1108,9 @@ class MetadataCollector(threading.Thread):
     def get_openmeteo_cached(self, session: requests.Session, point: CCTVPoint) -> dict:
         cache_key = point.name
 
-        if self.should_fetch(cache_key, self.openmeteo_last_fetch, self.config.openmeteo_interval_seconds):
+        if self.should_fetch(
+            cache_key, self.openmeteo_last_fetch, self.config.openmeteo_interval_seconds
+        ):
             data = self.get_openmeteo(session, point)
             data["weather_cache_status"] = "fresh"
             data["weather_last_api_call"] = now_local().strftime("%Y-%m-%d %H:%M:%S")
@@ -1182,7 +1221,7 @@ class MetadataCollector(threading.Thread):
             "Metadata saved: %s | TomTom=%s | OpenMeteo=%s",
             csv_path,
             row.get("traffic_cache_status"),
-            row.get("weather_cache_status")
+            row.get("weather_cache_status"),
         )
 
 
@@ -1213,13 +1252,13 @@ class DiskMonitor(threading.Thread):
     def check_disk(self) -> None:
         ensure_dir(self.config.output_root)
         usage = shutil.disk_usage(self.config.output_root)
-        free_gb = usage.free / (1024 ** 3)
+        free_gb = usage.free / (1024**3)
 
         if free_gb < self.config.min_free_space_gb:
             self.logger.warning(
                 "Low disk space: %.2f GB free. Minimum configured: %.2f GB.",
                 free_gb,
-                self.config.min_free_space_gb
+                self.config.min_free_space_gb,
             )
         else:
             self.logger.info("Disk free space: %.2f GB.", free_gb)
@@ -1341,15 +1380,16 @@ class ArchiveEncoder(threading.Thread):
                 continue
         return files
 
-    def encode_batch(self, point: CCTVPoint, encoded_dir: Path, window_start: int, files: list[Path]) -> None:
+    def encode_batch(
+        self, point: CCTVPoint, encoded_dir: Path, window_start: int, files: list[Path]
+    ) -> None:
         if not files:
             return
 
         start_dt = datetime.fromtimestamp(window_start)
         end_dt = datetime.fromtimestamp(window_start + self.config.archive_interval_seconds)
         output = encoded_dir / (
-            f"{point.name}_{start_dt.strftime('%Y%m%d_%H%M%S')}_"
-            f"{end_dt.strftime('%H%M%S')}.mp4"
+            f"{point.name}_{start_dt.strftime('%Y%m%d_%H%M%S')}_{end_dt.strftime('%H%M%S')}.mp4"
         )
 
         if output.exists() and output.stat().st_size > 0:
@@ -1395,10 +1435,15 @@ class ArchiveEncoder(threading.Thread):
             tmp_output.replace(output)
             self.logger.info("Archive saved: %s | bytes=%s", output, output.stat().st_size)
 
-            if self.config.archive_delete_raw_after_success and not self.config.drive_upload_enabled:
+            if (
+                self.config.archive_delete_raw_after_success
+                and not self.config.drive_upload_enabled
+            ):
                 self.delete_raw_files(files)
             elif self.config.archive_delete_raw_after_success and self.config.drive_upload_enabled:
-                self.logger.info("Raw segments kept for Google Drive uploader: %s files", len(files))
+                self.logger.info(
+                    "Raw segments kept for Google Drive uploader: %s files", len(files)
+                )
 
         finally:
             try:
@@ -1421,11 +1466,15 @@ class ArchiveEncoder(threading.Thread):
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", self.config.ffmpeg_loglevel,
+            "-loglevel",
+            self.config.ffmpeg_loglevel,
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(list_path),
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_path),
             "-an",
         ]
 
@@ -1440,21 +1489,30 @@ class ArchiveEncoder(threading.Thread):
 
         if encoder in {"hevc_nvenc", "h264_nvenc"}:
             cmd += [
-                "-preset", self.config.archive_preset,
-                "-rc:v", "vbr",
-                "-b:v", self.config.archive_target_bitrate,
-                "-maxrate:v", self.config.archive_max_bitrate,
-                "-bufsize:v", self.config.archive_buffer_size,
+                "-preset",
+                self.config.archive_preset,
+                "-rc:v",
+                "vbr",
+                "-b:v",
+                self.config.archive_target_bitrate,
+                "-maxrate:v",
+                self.config.archive_max_bitrate,
+                "-bufsize:v",
+                self.config.archive_buffer_size,
             ]
         elif encoder in {"libx265", "libx264"}:
             preset = self.config.archive_preset
             if preset.startswith("p") and preset[1:].isdigit():
                 preset = "medium"
             cmd += [
-                "-preset", preset,
-                "-b:v", self.config.archive_target_bitrate,
-                "-maxrate:v", self.config.archive_max_bitrate,
-                "-bufsize:v", self.config.archive_buffer_size,
+                "-preset",
+                preset,
+                "-b:v",
+                self.config.archive_target_bitrate,
+                "-maxrate:v",
+                self.config.archive_max_bitrate,
+                "-bufsize:v",
+                self.config.archive_buffer_size,
             ]
         else:
             raise ValueError(
@@ -1488,11 +1546,7 @@ class ArchiveEncoder(threading.Thread):
 # =========================================================
 class GoogleDriveUploader(threading.Thread):
     DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
-    MIME_TYPES = {
-        ".ts": "video/mp2t",
-        ".mp4": "video/mp4",
-        ".csv": "text/csv"
-    }
+    MIME_TYPES = {".ts": "video/mp2t", ".mp4": "video/mp4", ".csv": "text/csv"}
 
     def __init__(self, points: list[CCTVPoint], config: RuntimeConfig, stop_event: threading.Event):
         super().__init__(name="google-drive-uploader", daemon=True)
@@ -1500,7 +1554,7 @@ class GoogleDriveUploader(threading.Thread):
         self.config = config
         self.stop_event = stop_event
         self.logger = logging.getLogger("gdrive")
-        self.service = None
+        self.service: Any = None
         self.folder_cache: dict[tuple[str, str], str] = {}
 
     def run(self) -> None:
@@ -1539,23 +1593,23 @@ class GoogleDriveUploader(threading.Thread):
 
     def build_service(self):
         from googleapiclient.discovery import build
-        import json
 
         scopes = ["https://www.googleapis.com/auth/drive.file"]
-        
-        with open(self.config.drive_auth_file, "r") as f:
+
+        with open(self.config.drive_auth_file) as f:
             auth_data = json.load(f)
-            
+
         if "type" in auth_data and auth_data["type"] == "service_account":
             from google.oauth2 import service_account
+
             credentials = service_account.Credentials.from_service_account_file(
                 self.config.drive_auth_file,
                 scopes=scopes,
             )
         else:
-            from google.oauth2.credentials import Credentials
             from google.auth.transport.requests import Request
-            
+            from google.oauth2.credentials import Credentials
+
             credentials = Credentials.from_authorized_user_file(self.config.drive_auth_file, scopes)
             if credentials and credentials.expired and credentials.refresh_token:
                 credentials.refresh(Request())
@@ -1594,13 +1648,13 @@ class GoogleDriveUploader(threading.Thread):
         encoded_dir = date_dir / point.name / "videos_encoded"
         raw_dir = date_dir / point.name / "videos"
         metadata_dir = date_dir / point.name / "metadata"
-        
+
         video_files = self.ready_files(encoded_dir, ["*.ts", "*.mp4"])
         if not video_files:
             video_files = self.ready_files(raw_dir, ["*.ts", "*.mp4"])
-            
+
         csv_files = self.ready_files(metadata_dir, ["*.csv"])
-            
+
         if not video_files and not csv_files:
             return
 
@@ -1633,7 +1687,7 @@ class GoogleDriveUploader(threading.Thread):
                 cutoff = time.time() - 86400  # 24 hours safe age for CSV
             else:
                 cutoff = time.time() - self.config.drive_safe_age_seconds
-                
+
             for path in sorted(target_dir.glob(ext)):
                 marker = self.upload_marker(path)
                 try:
@@ -1682,7 +1736,7 @@ class GoogleDriveUploader(threading.Thread):
             self.logger.info("Deleted local TS after Google Drive upload: %s", path)
         else:
             self.upload_marker(path).write_text(
-                f"{now_local().strftime('%Y-%m-%d %H:%M:%S')},{created.get('id','')}\n",
+                f"{now_local().strftime('%Y-%m-%d %H:%M:%S')},{created.get('id', '')}\n",
                 encoding="utf-8",
             )
 
@@ -1796,7 +1850,9 @@ class CCTVApp:
         logging.info("HLS reconnect at EOF: %s", self.config.hls_reconnect_at_eof)
         logging.info("Segment at clock time: %s", self.config.segment_atclocktime)
         logging.info("HLS live start index: %s", self.config.hls_live_start_index)
-        logging.info("FFmpeg reconnect on HTTP error: %s", self.config.ffmpeg_reconnect_on_http_error)
+        logging.info(
+            "FFmpeg reconnect on HTTP error: %s", self.config.ffmpeg_reconnect_on_http_error
+        )
         logging.info("Output FPS: %s", self.config.output_fps)
         logging.info("Transcode preset: %s", self.config.transcode_preset)
         logging.info("Transcode CRF/CQ compatibility value: %s", self.config.transcode_crf)
@@ -1809,7 +1865,9 @@ class CCTVApp:
         logging.info("Archive interval: %s seconds", self.config.archive_interval_seconds)
         logging.info("Archive scan interval: %s seconds", self.config.archive_scan_seconds)
         logging.info("Archive safe age: %s seconds", self.config.archive_safe_age_seconds)
-        logging.info("Archive delete raw after success: %s", self.config.archive_delete_raw_after_success)
+        logging.info(
+            "Archive delete raw after success: %s", self.config.archive_delete_raw_after_success
+        )
         logging.info("Archive video encoder: %s", self.config.archive_video_encoder)
         logging.info("Archive target bitrate: %s", self.config.archive_target_bitrate)
         logging.info("Archive maximum bitrate: %s", self.config.archive_max_bitrate)
@@ -1817,11 +1875,16 @@ class CCTVApp:
         logging.info("Google Drive folder ID configured: %s", bool(self.config.drive_folder_id))
         logging.info("Google Drive scan interval: %s seconds", self.config.drive_scan_seconds)
         logging.info("Google Drive safe age: %s seconds", self.config.drive_safe_age_seconds)
-        logging.info("Google Drive delete local after upload: %s", self.config.drive_delete_local_after_upload)
+        logging.info(
+            "Google Drive delete local after upload: %s",
+            self.config.drive_delete_local_after_upload,
+        )
         logging.info("Preflight check: %s", self.config.preflight_check)
         logging.info("Offline retry seconds: %s", self.config.offline_retry_seconds)
         logging.info("Network retry seconds: %s", self.config.network_retry_seconds)
-        logging.info("Metadata CSV write interval: %s seconds", self.config.metadata_interval_seconds)
+        logging.info(
+            "Metadata CSV write interval: %s seconds", self.config.metadata_interval_seconds
+        )
         logging.info("TomTom API interval: %s seconds", self.config.tomtom_interval_seconds)
         logging.info("Open-Meteo API interval: %s seconds", self.config.openmeteo_interval_seconds)
         logging.info("Retention days: %s", self.config.retention_days)
@@ -1831,13 +1894,14 @@ class CCTVApp:
             logging.warning("TOMTOM_API not found. TomTom metadata will be empty.")
 
         fallback_points = [
-            p.name for p in points
+            p.name
+            for p in points
             if p.lat == self.config.default_lat and p.lon == self.config.default_lon
         ]
         if fallback_points:
             logging.warning(
                 "Some CCTV points use fallback coordinates. Update cctv_points.csv for accuracy: %s",
-                ", ".join(fallback_points)
+                ", ".join(fallback_points),
             )
 
         for point in points:
