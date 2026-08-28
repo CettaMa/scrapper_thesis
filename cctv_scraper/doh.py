@@ -53,7 +53,7 @@ class DoHResolver:
                     with cls._lock:
                         cls._set_cache(hostname, ip)
                     return ip
-        except Exception:
+        except (requests.RequestException, ValueError, KeyError):
             pass
 
         # If resolution fails, cache negative result for TTL to avoid repeated slow timeouts

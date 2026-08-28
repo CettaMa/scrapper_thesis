@@ -186,7 +186,7 @@ class MetadataCollector(threading.Thread):
                 "traffic_status": "ok",
             }
 
-        except Exception as exc:
+        except (requests.RequestException, ValueError, KeyError) as exc:
             self.logger.warning("TomTom failed for %s: %s", point.name, exc)
             return default
 
@@ -221,7 +221,7 @@ class MetadataCollector(threading.Thread):
                 "weather_status": "ok",
             }
 
-        except Exception as exc:
+        except (requests.RequestException, ValueError, KeyError) as exc:
             self.logger.warning("Open-Meteo failed for %s: %s", point.name, exc)
             return default
 
@@ -233,11 +233,14 @@ class MetadataCollector(threading.Thread):
         csv_path = metadata_dir / f"{point.name}_{date_folder}_metadata.csv"
         file_exists = csv_path.exists()
 
-        with csv_path.open("a", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(row.keys()))
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(row)
+        try:
+            with csv_path.open("a", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(row)
+        except OSError as exc:
+            self.logger.warning("Failed to write metadata CSV %s: %s", csv_path, exc)
 
         self.logger.info(
             "Metadata saved: %s | TomTom=%s | OpenMeteo=%s",

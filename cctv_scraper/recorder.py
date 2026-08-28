@@ -280,7 +280,7 @@ class CCTVRecorder(threading.Thread):
                 if not file_exists:
                     writer.writeheader()
                 writer.writerow(row)
-        except Exception as exc:
+        except OSError as exc:
             self.logger.warning("Failed to write status CSV: %s", exc)
 
     def preflight_stream(self) -> tuple[bool, str, str]:
@@ -332,7 +332,7 @@ class CCTVRecorder(threading.Thread):
         except requests.exceptions.Timeout:
             return False, "timeout", ""
 
-        except Exception as exc:
+        except requests.RequestException as exc:
             return False, f"preflight_error: {exc}", ""
 
     def sleep_after_preflight_failure(self, reason: str) -> None:
@@ -485,7 +485,7 @@ class CCTVRecorder(threading.Thread):
                 self.logger.warning("Recent FFmpeg stderr:")
                 for line in recent:
                     self.logger.warning("FFmpeg | %s", line)
-        except Exception as exc:
+        except OSError as exc:
             self.logger.warning("Cannot read FFmpeg stderr log: %s", exc)
 
     def close_ffmpeg_stderr(self) -> None:
@@ -493,7 +493,7 @@ class CCTVRecorder(threading.Thread):
             try:
                 self.ffmpeg_stderr_file.flush()
                 self.ffmpeg_stderr_file.close()
-            except Exception:
+            except OSError:
                 pass
             self.ffmpeg_stderr_file = None
 
@@ -510,7 +510,7 @@ class CCTVRecorder(threading.Thread):
             except subprocess.TimeoutExpired:
                 self.logger.warning("FFmpeg did not terminate. Killing process.")
                 self.process.kill()
-            except Exception as exc:
+            except OSError as exc:
                 self.logger.warning("Failed to stop FFmpeg cleanly: %s", exc)
 
         self.process = None

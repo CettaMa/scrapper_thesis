@@ -391,10 +391,10 @@ def now_local() -> datetime:
     return datetime.now()
 
 
-def safe_float(value: str, fallback: float) -> float:
+def safe_float(value: object, fallback: float) -> float:
     try:
         return float(str(value).strip())
-    except Exception:
+    except (ValueError, TypeError):
         return fallback
 
 

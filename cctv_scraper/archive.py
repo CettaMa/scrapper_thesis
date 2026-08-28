@@ -138,12 +138,12 @@ class ArchiveEncoder(threading.Thread):
         finally:
             try:
                 list_path.unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 pass
             if tmp_output.exists():
                 try:
                     tmp_output.unlink()
-                except Exception:
+                except OSError:
                     pass
 
     def write_concat_file(self, list_path: Path, files: list[Path]) -> None:
@@ -221,7 +221,7 @@ class ArchiveEncoder(threading.Thread):
                 deleted += 1
             except FileNotFoundError:
                 continue
-            except Exception as exc:
+            except OSError as exc:
                 self.logger.warning("Failed deleting raw segment %s: %s", path, exc)
 
         self.logger.info("Deleted %s raw segments after archive encode.", deleted)

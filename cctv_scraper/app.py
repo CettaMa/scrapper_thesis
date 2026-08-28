@@ -60,7 +60,7 @@ class CCTVApp:
         logging.info("Loading CCTV points from: %s", self.config.config_file)
         points = load_cctv_points(self.config)
 
-        logging.info("CCTV 24x7 Scraper v7 Storage Optimized starting.")
+        logging.info("CCTV 24x7 Scraper starting.")
         logging.info("Total CCTV points: %s", len(points))
         logging.info("Output root: %s", self.config.output_root.resolve())
         logging.info("Segment duration: %s seconds", self.config.segment_seconds)
