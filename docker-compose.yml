@@ -16,9 +16,8 @@ services:
       TZ: Asia/Jakarta
       LIBVA_DRIVER_NAME: iHD
       LIBVA_DRIVERS_PATH: /usr/lib/x86_64-linux-gnu/dri
-    # Set RENDER_GID and VIDEO_GID from the host when they differ from defaults.
     group_add:
-      - "${RENDER_GID:-109}"
+      - "${RENDER_GID:-991}"
       - "${VIDEO_GID:-44}"
     volumes:
       - ./dataset:/app/dataset

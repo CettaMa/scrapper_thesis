@@ -20,7 +20,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ---------------------------------------------------------------------------
-# Stage 2: Minimal runtime image with FFmpeg and optional Intel QuickSync support
+# Stage 2: Minimal runtime image with FFmpeg and Intel QuickSync / VA-API support
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04
 
@@ -38,7 +38,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
-        intel-media-va-driver \
+        intel-media-va-driver-non-free \
         libva-drm2 \
         libva2 \
         vainfo \
@@ -56,8 +56,11 @@ COPY cctv_scraper/ ./cctv_scraper/
 COPY scripts/test_vaapi.sh /usr/local/bin/test-vaapi
 COPY cctv_points.csv ./
 
-RUN chmod +x /usr/local/bin/test-vaapi \
+# Create host-matching render/video groups and assign appuser
+RUN groupadd -g 991 render 2>/dev/null || true \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
+    && usermod -aG video,render appuser \
+    && chmod +x /usr/local/bin/test-vaapi \
     && mkdir -p /app/dataset \
     && chown -R appuser:appuser /app
 
