@@ -38,7 +38,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
-        intel-media-driver \
+        intel-media-va-driver \
         libva-drm2 \
         libva2 \
         vainfo \
