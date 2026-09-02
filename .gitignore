@@ -1,22 +1,53 @@
-# Environment variables & secrets
+# =========================================================
+# Environment variables & Secrets
+# =========================================================
 .env
+.env.*
+!.env.example
 secrets/
 credentials.json
+token.json
+client_secret*.json
 generate_drive_token.py
-
-# Datasets & Outputs
+# =========================================================
+# Datasets, Scraper Outputs & Temporary Files
+# =========================================================
 dataset/
 metadata_e/
-
-# Python caching
+logs/
+status/
+.*.concat.txt
+.*.tmp.mp4
+# =========================================================
+# Python & Tooling Caching
+# =========================================================
 __pycache__/
-*.pyc
-.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
 venv/
 env/
 .env_dir/
-
-# OS generated files
+# Testing & Linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# =========================================================
+# IDEs & OS generated files
+# =========================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini
+
+REFACTOR_NOTES.md
+
+/graphify-out

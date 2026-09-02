@@ -31,26 +31,37 @@ Stop:
 docker compose down
 ```
 
-## NVIDIA GPU / NVENC Check
+## Intel QuickSync / FFmpeg Check
 
-Install Docker Desktop plus NVIDIA Container Toolkit support first. Then verify FFmpeg sees NVENC inside the image:
+The image does not contain NVIDIA CUDA or require NVIDIA Container Toolkit. It is based on standard Ubuntu and includes FFmpeg plus Intel media runtime libraries.
+
+Check the available encoders:
 
 ```powershell
 docker compose run --rm cctv-scraper ffmpeg -hide_banner -encoders
 ```
 
-Look for:
-
-```text
-h264_nvenc
-hevc_nvenc
-```
-
-RTX 3060 Laptop can use `hevc_nvenc` and `h264_nvenc`, but not AV1 NVENC encode. Keep:
+The archive configuration uses:
 
 ```env
-ARCHIVE_VIDEO_ENCODER=hevc_nvenc
+ARCHIVE_VIDEO_ENCODER=h264_vaapi
+ARCHIVE_FALLBACK_ENCODER=libx264
+ARCHIVE_PRESET=veryfast
 ```
+
+VA-API requires an Intel GPU/media device. On Linux hosts with Intel graphics, add this device mapping to the service if `/dev/dri` exists.
+
+The render group GID is host-specific. For this host, `/dev/dri/renderD128` requires GID `991`; do not assume the common default `109`. Compose requires `RENDER_GID` and `VIDEO_GID` explicitly so an incorrect fallback cannot silently block `appuser`.
+
+```yaml
+devices:
+  - /dev/dri:/dev/dri
+group_add:
+  - "${RENDER_GID:?Set RENDER_GID to the host render group GID}"
+  - "${VIDEO_GID:?Set VIDEO_GID to the host video group GID}"
+```
+
+If VA-API is unavailable, the archive worker automatically retries the affected window with `libx264` instead of losing the recording. A VPS without an Intel media device will therefore use the CPU fallback.
 
 ## Data And Config
 
@@ -61,40 +72,23 @@ Runtime mounts:
 ```text
 ./dataset -> /app/dataset
 ./cctv_points.csv -> /app/cctv_points.csv
-./secrets -> /app/secrets
 ```
 
 Runtime env:
 
 ```text
-.env -> container environment
+.env -> container environment (local recording configuration only)
 TZ=Asia/Jakarta -> container timezone
 ```
 
-## Google Drive Upload
+## Local Video Storage
 
-1. Create a Google Cloud service account.
-2. Download its JSON key.
-3. Put the key at:
+Google Drive uploading has been removed. All recordings remain in the local dataset directory:
 
 ```text
-secrets/google-service-account.json
+dataset/<date>/<camera>/videos/*.ts
+dataset/<date>/<camera>/videos_encoded/*.mp4
+dataset/<date>/<camera>/metadata/*.csv
 ```
 
-4. Share the target Google Drive folder with the service account email.
-5. Put the target folder ID into `.env`:
-
-```env
-GOOGLE_DRIVE_UPLOAD_ENABLED=true
-GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE=/app/secrets/google-service-account.json
-GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id
-GOOGLE_DRIVE_DELETE_LOCAL_AFTER_UPLOAD=false
-```
-
-Uploaded raw `.ts` files are placed in Drive as:
-
-```text
-<root folder>/<date>/<camera>/videos/<file>.ts
-```
-
-If `GOOGLE_DRIVE_DELETE_LOCAL_AFTER_UPLOAD=false`, local `.ts` files stay on disk and a `.uploaded` marker prevents duplicate uploads.
+The Docker compose configuration mounts `./dataset` to `/app/dataset`, so files remain available on the host. Set `ARCHIVE_DELETE_RAW_AFTER_SUCCESS=true` to remove raw `.ts` segments after successful local MP4 archiving, or set it to `false` to retain both formats.
