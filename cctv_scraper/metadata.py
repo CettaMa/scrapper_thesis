@@ -51,11 +51,14 @@ class MetadataCollector(threading.Thread):
     def run(self) -> None:
         self.logger.info("Metadata collector started.")
         self.logger.info(
-            "Metadata CSV write interval: %s seconds", self.config.metadata_interval_seconds
+            "Metadata CSV write interval: %s seconds",
+            self.config.metadata.metadata_interval_seconds,
         )
-        self.logger.info("TomTom API interval: %s seconds", self.config.tomtom_interval_seconds)
         self.logger.info(
-            "Open-Meteo API interval: %s seconds", self.config.openmeteo_interval_seconds
+            "TomTom API interval: %s seconds", self.config.metadata.tomtom_interval_seconds
+        )
+        self.logger.info(
+            "Open-Meteo API interval: %s seconds", self.config.metadata.openmeteo_interval_seconds
         )
 
         session = requests.Session()
@@ -86,13 +89,13 @@ class MetadataCollector(threading.Thread):
                 failure_backoff = 0
                 if self.consecutive_failed_passes:
                     failure_backoff = min(
-                        self.config.metadata_failure_backoff_max_seconds,
-                        self.config.metadata_failure_backoff_base_seconds
+                        self.config.metadata.failure_backoff_max_seconds,
+                        self.config.metadata.failure_backoff_base_seconds
                         * (2 ** (self.consecutive_failed_passes - 1)),
                     )
                 sleep_time = max(
-                    self.config.metadata_min_pass_interval_seconds,
-                    self.config.metadata_interval_seconds - elapsed,
+                    self.config.metadata.min_pass_interval_seconds,
+                    self.config.metadata.metadata_interval_seconds - elapsed,
                     failure_backoff,
                 )
                 self.stop_event.wait(sleep_time)
@@ -139,7 +142,7 @@ class MetadataCollector(threading.Thread):
         cache_key = point.name
 
         if self.should_fetch(
-            cache_key, self.tomtom_last_fetch, self.config.tomtom_interval_seconds
+            cache_key, self.tomtom_last_fetch, self.config.metadata.tomtom_interval_seconds
         ):
             data = self.get_tomtom(session, point)
             data["traffic_cache_status"] = "fresh"
@@ -167,7 +170,7 @@ class MetadataCollector(threading.Thread):
         cache_key = point.name
 
         if self.should_fetch(
-            cache_key, self.openmeteo_last_fetch, self.config.openmeteo_interval_seconds
+            cache_key, self.openmeteo_last_fetch, self.config.metadata.openmeteo_interval_seconds
         ):
             data = self.get_openmeteo(session, point)
             data["weather_cache_status"] = "fresh"
@@ -194,7 +197,9 @@ class MetadataCollector(threading.Thread):
         """Fetch weather for every point with one request when the cache expires."""
         due = any(
             self.should_fetch(
-                point.name, self.openmeteo_last_fetch, self.config.openmeteo_interval_seconds
+                point.name,
+                self.openmeteo_last_fetch,
+                self.config.metadata.openmeteo_interval_seconds,
             )
             for point in self.points
         )
@@ -241,15 +246,17 @@ class MetadataCollector(threading.Thread):
             "traffic_confidence": None,
             "traffic_road_closure": None,
             "traffic_source": "tomtom",
-            "traffic_status": "missing_api_key" if not self.config.tomtom_api_key else "error",
+            "traffic_status": "missing_api_key"
+            if not self.config.metadata.tomtom_api_key
+            else "error",
         }
 
-        if not self.config.tomtom_api_key:
+        if not self.config.metadata.tomtom_api_key:
             return default
 
         url = (
             "https://api.tomtom.com/traffic/services/4/flowSegmentData/"
-            f"absolute/10/json?key={self.config.tomtom_api_key}&point={point.lat},{point.lon}"
+            f"absolute/10/json?key={self.config.metadata.tomtom_api_key}&point={point.lat},{point.lon}"
         )
 
         try:
@@ -362,7 +369,7 @@ class MetadataCollector(threading.Thread):
 
     def write_metadata(self, point: CCTVPoint, row: dict) -> None:
         date_folder = row["date"]
-        metadata_dir = self.config.output_root / date_folder / point.name / "metadata"
+        metadata_dir = self.config.storage.output_root / date_folder / point.name / "metadata"
         ensure_dir(metadata_dir)
 
         csv_path = metadata_dir / f"{point.name}_{date_folder}_metadata.csv"

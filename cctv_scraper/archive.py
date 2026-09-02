@@ -26,7 +26,7 @@ class ArchiveEncoder(threading.Thread):
         self.logger = logging.getLogger("archive")
 
     def run(self) -> None:
-        if not self.config.archive_encoder_enabled:
+        if not self.config.archive.enabled:
             self.logger.info("Archive encoder disabled.")
             return
 
@@ -38,7 +38,7 @@ class ArchiveEncoder(threading.Thread):
             except Exception as exc:
                 self.logger.exception("Archive encoder error: %s", exc)
 
-            self.stop_event.wait(self.config.archive_scan_seconds)
+            self.stop_event.wait(self.config.archive.scan_seconds)
 
         self.logger.info("Archive encoder stopped.")
 
@@ -50,10 +50,10 @@ class ArchiveEncoder(threading.Thread):
                 self.encode_point_date(point, date_dir)
 
     def date_dirs_for_point(self, point: CCTVPoint) -> list[Path]:
-        return iter_point_date_dirs(self.config.output_root, point)
+        return iter_point_date_dirs(self.config.storage.output_root, point)
 
     def ready_raw_files(self, raw_dir: Path) -> list[Path]:
-        return ready_files(raw_dir, [".ts"], self.config.archive_safe_age_seconds)
+        return ready_files(raw_dir, [".ts"], self.config.archive.safe_age_seconds)
 
     def encode_point_date(self, point: CCTVPoint, date_dir: Path) -> None:
         raw_dir = date_dir / point.name / "videos"
@@ -69,10 +69,10 @@ class ArchiveEncoder(threading.Thread):
             segment_start = self.segment_start_timestamp(point, path)
             if segment_start is None:
                 segment_start = int(path.stat().st_mtime)
-            window_start = segment_start // self.config.archive_interval_seconds
-            window_start *= self.config.archive_interval_seconds
-            window_end = window_start + self.config.archive_interval_seconds
-            if time.time() < window_end + self.config.archive_safe_age_seconds:
+            window_start = segment_start // self.config.archive.interval_seconds
+            window_start *= self.config.archive.interval_seconds
+            window_end = window_start + self.config.archive.interval_seconds
+            if time.time() < window_end + self.config.archive.safe_age_seconds:
                 continue
             grouped.setdefault(window_start, []).append(path)
 
@@ -88,7 +88,7 @@ class ArchiveEncoder(threading.Thread):
             return
 
         start_dt = datetime.fromtimestamp(window_start)
-        end_dt = datetime.fromtimestamp(window_start + self.config.archive_interval_seconds)
+        end_dt = datetime.fromtimestamp(window_start + self.config.archive.interval_seconds)
         output = encoded_dir / (
             f"{point.name}_{start_dt.strftime('%Y%m%d_%H%M%S')}_{end_dt.strftime('%H%M%S')}.mp4"
         )
@@ -176,7 +176,7 @@ class ArchiveEncoder(threading.Thread):
             self.remove_failure_marker(failure_marker)
             self.logger.info("Archive saved: %s | bytes=%s", output, output.stat().st_size)
 
-            if self.config.archive_delete_raw_after_success:
+            if self.config.archive.delete_raw_after_success:
                 self.delete_raw_files(files)
 
         finally:
@@ -209,7 +209,7 @@ class ArchiveEncoder(threading.Thread):
     def build_manifest(
         self, point: CCTVPoint, window_start: int, files: list[Path], encoder: str
     ) -> dict[str, object]:
-        window_end = window_start + self.config.archive_interval_seconds
+        window_end = window_start + self.config.archive.interval_seconds
         segment_starts: list[int] = []
         for path in files:
             segment_start = self.segment_start_timestamp(point, path)
@@ -221,7 +221,7 @@ class ArchiveEncoder(threading.Thread):
         intervals = sorted(
             (
                 max(window_start, start),
-                min(window_end, start + self.config.segment_seconds),
+                min(window_end, start + self.config.recorder.segment_seconds),
             )
             for start in segment_starts
         )
@@ -255,7 +255,7 @@ class ArchiveEncoder(threading.Thread):
             "last_segment_start": last_start,
             "first_segment_start_iso": datetime.fromtimestamp(first_start).isoformat(),
             "last_segment_start_iso": datetime.fromtimestamp(last_start).isoformat(),
-            "expected_covered_duration_seconds": self.config.archive_interval_seconds,
+            "expected_covered_duration_seconds": self.config.archive.interval_seconds,
             "actual_covered_duration_seconds": actual_duration,
             "encoder": encoder,
             "encoder_used": encoder,
@@ -303,7 +303,7 @@ class ArchiveEncoder(threading.Thread):
         previous_attempts = state.get("attempts", 0)
         attempts = int(previous_attempts) if isinstance(previous_attempts, (int, float)) else 0
         attempts += 1
-        max_attempts = self.config.archive_max_attempts
+        max_attempts = self.config.archive.max_attempts
         terminal = attempts >= max_attempts
         failure_time = time.time()
         state = {
@@ -322,8 +322,8 @@ class ArchiveEncoder(threading.Thread):
             )
         else:
             delay = min(
-                self.config.archive_retry_max_seconds,
-                self.config.archive_retry_base_seconds * (2 ** (attempts - 1)),
+                self.config.archive.retry_max_seconds,
+                self.config.archive.retry_base_seconds * (2 ** (attempts - 1)),
             )
             state["next_retry_at"] = failure_time + delay
             self.logger.warning(
@@ -370,16 +370,16 @@ class ArchiveEncoder(threading.Thread):
     def build_encode_command(
         self, list_path: Path, output: Path, encoder: str | None = None
     ) -> list[str]:
-        encoder = encoder or self.config.archive_video_encoder
+        encoder = encoder or self.config.archive.video_encoder
         cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel",
-            self.config.ffmpeg_loglevel,
+            self.config.recorder.ffmpeg_loglevel,
             "-y",
         ]
         if encoder in {"h264_vaapi", "hevc_vaapi"}:
-            cmd += ["-vaapi_device", self.config.archive_vaapi_device]
+            cmd += ["-vaapi_device", self.config.archive.vaapi_device]
 
         cmd += [
             "-f",
@@ -396,8 +396,8 @@ class ArchiveEncoder(threading.Thread):
         ]
 
         filters = []
-        if self.config.archive_output_height > 0:
-            filters.append(f"scale=-2:{self.config.archive_output_height}")
+        if self.config.archive.output_height > 0:
+            filters.append(f"scale=-2:{self.config.archive.output_height}")
         if encoder in {"h264_vaapi", "hevc_vaapi"}:
             # VA-API encoders require hardware-uploaded NV12 frames.
             filters.extend(["format=nv12", "hwupload"])
@@ -409,52 +409,52 @@ class ArchiveEncoder(threading.Thread):
         if encoder in {"hevc_nvenc", "h264_nvenc"}:
             cmd += [
                 "-preset",
-                self.config.archive_preset,
+                self.config.archive.preset,
                 "-rc:v",
                 "vbr",
                 "-b:v",
-                self.config.archive_target_bitrate,
+                self.config.archive.target_bitrate,
                 "-maxrate:v",
-                self.config.archive_max_bitrate,
+                self.config.archive.max_bitrate,
                 "-bufsize:v",
-                self.config.archive_buffer_size,
+                self.config.archive.buffer_size,
             ]
         elif encoder in {"h264_qsv", "hevc_qsv"}:
-            preset = self.config.archive_preset
+            preset = self.config.archive.preset
             if preset.startswith("p") and preset[1:].isdigit():
                 preset = "veryfast"
             cmd += [
                 "-preset",
                 preset,
                 "-b:v",
-                self.config.archive_target_bitrate,
+                self.config.archive.target_bitrate,
                 "-maxrate:v",
-                self.config.archive_max_bitrate,
+                self.config.archive.max_bitrate,
                 "-bufsize:v",
-                self.config.archive_buffer_size,
+                self.config.archive.buffer_size,
             ]
         elif encoder in {"h264_vaapi", "hevc_vaapi"}:
             cmd += [
                 "-b:v",
-                self.config.archive_target_bitrate,
+                self.config.archive.target_bitrate,
                 "-maxrate:v",
-                self.config.archive_max_bitrate,
+                self.config.archive.max_bitrate,
                 "-bufsize:v",
-                self.config.archive_buffer_size,
+                self.config.archive.buffer_size,
             ]
         elif encoder in {"libx265", "libx264"}:
-            preset = self.config.archive_preset
+            preset = self.config.archive.preset
             if preset.startswith("p") and preset[1:].isdigit():
                 preset = "medium"
             cmd += [
                 "-preset",
                 preset,
                 "-b:v",
-                self.config.archive_target_bitrate,
+                self.config.archive.target_bitrate,
                 "-maxrate:v",
-                self.config.archive_max_bitrate,
+                self.config.archive.max_bitrate,
                 "-bufsize:v",
-                self.config.archive_buffer_size,
+                self.config.archive.buffer_size,
             ]
         else:
             raise ValueError(

@@ -231,8 +231,8 @@ def test_load_cctv_points_headerless(tmp_path: Path) -> None:
     assert len(points) == 2
     assert points[0].name == "cam_one"
     assert points[0].url == "http://example.com/one.m3u8"
-    assert points[0].lat == pytest.approx(cfg.default_lat)
-    assert points[0].lon == pytest.approx(cfg.default_lon)
+    assert points[0].lat == pytest.approx(cfg.metadata.default_lat)
+    assert points[0].lon == pytest.approx(cfg.metadata.default_lon)
 
 
 def test_load_cctv_points_duplicate_name_rejection(tmp_path: Path) -> None:
@@ -880,7 +880,7 @@ def test_archive_hardware_probe_switches_to_fallback(tmp_path: Path) -> None:
     with patch("cctv_scraper.app.subprocess.run", side_effect=[encoders, probe]) as run:
         validated = validate_video_encoder(cfg)
 
-    assert validated.archive_video_encoder == "libx264"
+    assert validated.archive.video_encoder == "libx264"
     probe_command = run.call_args_list[1].args[0]
     assert probe_command[probe_command.index("-vaapi_device") + 1] == "/dev/dri/renderD128"
     assert probe_command[probe_command.index("-t") + 1] == "1"

@@ -21,10 +21,10 @@ class CCTVRecorder(threading.Thread):
         self.stop_event = stop_event
         self.process: subprocess.Popen | None = None
         self.logger = point_logger(
-            config.output_root,
+            config.storage.output_root,
             point.name,
-            config.log_max_bytes,
-            config.log_backup_count,
+            config.storage.log_max_bytes,
+            config.storage.log_backup_count,
         )
         self.last_restart_at: datetime | None = None
         self.process_start_date: date | None = None
@@ -57,14 +57,14 @@ class CCTVRecorder(threading.Thread):
                     self.logger.warning(
                         "FFmpeg dropped on its own. Short delay then re-preflight before restart."
                     )
-                    self.stop_event.wait(self.config.restart_delay_seconds)
+                    self.stop_event.wait(self.config.recorder.restart_delay_seconds)
                     # Loop kembali ke preflight — tidak langsung spawn FFmpeg.
                 else:
                     self.logger.warning(
                         "FFmpeg stopped or unhealthy. Restarting in %s seconds.",
-                        self.config.restart_delay_seconds,
+                        self.config.recorder.restart_delay_seconds,
                     )
-                    self.stop_event.wait(self.config.restart_delay_seconds)
+                    self.stop_event.wait(self.config.recorder.restart_delay_seconds)
 
         self.stop_ffmpeg()
         self.logger.info("Recorder watchdog stopped.")
@@ -74,20 +74,26 @@ class CCTVRecorder(threading.Thread):
 
     def current_video_dir(self) -> Path:
         video_dir = (
-            self.config.output_root / self.current_date_folder() / self.point.name / "videos"
+            self.config.storage.output_root
+            / self.current_date_folder()
+            / self.point.name
+            / "videos"
         )
         ensure_dir(video_dir)
         return video_dir
 
     def stderr_path(self) -> Path:
-        ensure_dir(self.config.output_root / "logs" / "ffmpeg")
+        ensure_dir(self.config.storage.output_root / "logs" / "ffmpeg")
         date_str = now_local().strftime("%Y-%m-%d")
         return (
-            self.config.output_root / "logs" / "ffmpeg" / f"{self.point.name}_{date_str}.ffmpeg.log"
+            self.config.storage.output_root
+            / "logs"
+            / "ffmpeg"
+            / f"{self.point.name}_{date_str}.ffmpeg.log"
         )
 
     def output_extension(self) -> str:
-        return "ts" if self.config.video_container == "ts" else "mp4"
+        return "ts" if self.config.recorder.video_container == "ts" else "mp4"
 
     def build_output_pattern(self) -> str:
         video_dir = self.current_video_dir()
@@ -96,12 +102,12 @@ class CCTVRecorder(threading.Thread):
 
     def input_headers(self) -> dict[str, str]:
         headers = {
-            "User-Agent": self.config.ffmpeg_user_agent,
+            "User-Agent": self.config.recorder.ffmpeg_user_agent,
         }
-        if self.config.ffmpeg_referer:
-            headers["Referer"] = self.config.ffmpeg_referer
-        if self.config.ffmpeg_origin:
-            headers["Origin"] = self.config.ffmpeg_origin
+        if self.config.recorder.ffmpeg_referer:
+            headers["Referer"] = self.config.recorder.ffmpeg_referer
+        if self.config.recorder.ffmpeg_origin:
+            headers["Origin"] = self.config.recorder.ffmpeg_origin
         return headers
 
     def ffmpeg_headers_arg(self) -> str:
@@ -114,14 +120,14 @@ class CCTVRecorder(threading.Thread):
             "ffmpeg",
             "-hide_banner",
             "-loglevel",
-            self.config.ffmpeg_loglevel,
+            self.config.recorder.ffmpeg_loglevel,
             # Input stability for unstable HLS CCTV streams.
             "-fflags",
             "+genpts+discardcorrupt+nobuffer",
             "-err_detect",
             "ignore_err",
             "-rw_timeout",
-            self.config.ffmpeg_rw_timeout,
+            self.config.recorder.ffmpeg_rw_timeout,
             "-reconnect",
             "1",
             "-reconnect_streamed",
@@ -129,45 +135,45 @@ class CCTVRecorder(threading.Thread):
             "-reconnect_on_network_error",
             "1",
             "-reconnect_on_http_error",
-            self.config.ffmpeg_reconnect_on_http_error,
+            self.config.recorder.ffmpeg_reconnect_on_http_error,
             "-reconnect_delay_max",
-            self.config.ffmpeg_reconnect_delay_max,
+            self.config.recorder.ffmpeg_reconnect_delay_max,
             "-http_persistent",
             "0",
             "-multiple_requests",
             "0",
             "-user_agent",
-            self.config.ffmpeg_user_agent,
+            self.config.recorder.ffmpeg_user_agent,
             "-headers",
             self.ffmpeg_headers_arg(),
             "-analyzeduration",
-            self.config.ffmpeg_analyzeduration,
+            self.config.recorder.ffmpeg_analyzeduration,
             "-probesize",
-            self.config.ffmpeg_probesize,
+            self.config.recorder.ffmpeg_probesize,
         ]
 
-        if self.config.hls_reconnect_at_eof:
+        if self.config.recorder.hls_reconnect_at_eof:
             cmd += ["-reconnect_at_eof", "1"]
 
         # Start from newest live HLS segment. This reduces "expired from playlists"
         # and short/failed recordings caused by trying to fetch old .ts fragments.
         if self.point.url.lower().split("?")[0].endswith(".m3u8"):
-            cmd += ["-live_start_index", self.config.hls_live_start_index]
+            cmd += ["-live_start_index", self.config.recorder.hls_live_start_index]
 
         cmd += ["-i", self.point.url]
 
-        if self.config.ffmpeg_transport_mode in {"transcode", "smooth"}:
+        if self.config.recorder.ffmpeg_transport_mode in {"transcode", "smooth"}:
             # CFR mengatasi timestamp stream sumber yang tidak stabil.
             # Bitrate-limited encoding menjaga kebutuhan storage dapat diprediksi.
-            fps = max(1, int(self.config.output_fps))
-            gop = max(1, fps * max(1, int(self.config.segment_keyframe_seconds)))
+            fps = max(1, int(self.config.recorder.output_fps))
+            gop = max(1, fps * max(1, int(self.config.recorder.segment_keyframe_seconds)))
 
             filters = [f"fps={fps}"]
-            if self.config.output_height > 0:
-                filters.append(f"scale=-2:{self.config.output_height}")
+            if self.config.recorder.output_height > 0:
+                filters.append(f"scale=-2:{self.config.recorder.output_height}")
             filters.append("format=yuv420p")
 
-            encoder = self.config.video_encoder
+            encoder = self.config.recorder.video_encoder
             cmd += [
                 "-map",
                 "0:v:0",
@@ -183,29 +189,29 @@ class CCTVRecorder(threading.Thread):
             if encoder in {"h264_nvenc", "hevc_nvenc"}:
                 cmd += [
                     "-preset",
-                    self.config.transcode_preset,
+                    self.config.recorder.transcode_preset,
                     "-rc:v",
                     "vbr",
                     "-b:v",
-                    self.config.target_bitrate,
+                    self.config.recorder.target_bitrate,
                     "-maxrate:v",
-                    self.config.max_bitrate,
+                    self.config.recorder.max_bitrate,
                     "-bufsize:v",
-                    self.config.buffer_size,
+                    self.config.recorder.buffer_size,
                 ]
             elif encoder in {"libx265", "libx264"}:
-                cpu_preset = self.config.transcode_preset
+                cpu_preset = self.config.recorder.transcode_preset
                 if cpu_preset.startswith("p") and cpu_preset[1:].isdigit():
                     cpu_preset = "veryfast"
                 cmd += [
                     "-preset",
                     cpu_preset,
                     "-b:v",
-                    self.config.target_bitrate,
+                    self.config.recorder.target_bitrate,
                     "-maxrate:v",
-                    self.config.max_bitrate,
+                    self.config.recorder.max_bitrate,
                     "-bufsize:v",
-                    self.config.buffer_size,
+                    self.config.recorder.buffer_size,
                 ]
             else:
                 raise ValueError(
@@ -232,7 +238,7 @@ class CCTVRecorder(threading.Thread):
             "-f",
             "segment",
             "-segment_time",
-            str(self.config.segment_seconds),
+            str(self.config.recorder.segment_seconds),
             "-reset_timestamps",
             "1",
             "-strftime",
@@ -241,10 +247,10 @@ class CCTVRecorder(threading.Thread):
 
         # Disabled by default. When enabled, FFmpeg cuts on wall-clock boundaries,
         # so the first segment after a restart can naturally be only 1-59 seconds.
-        if self.config.segment_atclocktime:
+        if self.config.recorder.segment_atclocktime:
             cmd += ["-segment_atclocktime", "1"]
 
-        if self.config.video_container == "mp4":
+        if self.config.recorder.video_container == "mp4":
             cmd += [
                 "-segment_format",
                 "mp4",
@@ -258,7 +264,7 @@ class CCTVRecorder(threading.Thread):
         return cmd
 
     def status_dir(self) -> Path:
-        path = self.config.output_root / "status"
+        path = self.config.storage.output_root / "status"
         ensure_dir(path)
         return path
 
@@ -292,7 +298,7 @@ class CCTVRecorder(threading.Thread):
         Tujuannya bukan menggantikan FFmpeg, tetapi mencegah restart loop agresif
         saat URL jelas 404/403 atau DNS sedang bermasalah.
         """
-        if not self.config.preflight_check:
+        if not self.config.network.preflight_check:
             return True, "preflight_disabled", ""
 
         headers = {
@@ -354,7 +360,7 @@ class CCTVRecorder(threading.Thread):
             http_status or "-",
         )
 
-        threshold = self.config.expired_url_escalation_threshold
+        threshold = self.config.network.expired_url_escalation_threshold
         if is_expiry and self.consecutive_expiry_failures >= threshold:
             marker = "EXPIRED_URL_ESCALATION"
             if not self.expiry_url_escalated:
@@ -375,14 +381,14 @@ class CCTVRecorder(threading.Thread):
 
     def sleep_after_preflight_failure(self, reason: str) -> None:
         if "not_found" in reason or "forbidden" in reason or "unauthorized" in reason:
-            delay = self.config.offline_retry_seconds
+            delay = self.config.network.offline_retry_seconds
             self.logger.warning(
                 "Stream URL looks offline/expired: %s. Retrying in %s seconds.",
                 reason,
                 delay,
             )
         else:
-            delay = self.config.network_retry_seconds
+            delay = self.config.network.network_retry_seconds
             self.logger.warning(
                 "Stream network/server issue: %s. Retrying in %s seconds.",
                 reason,
@@ -406,8 +412,8 @@ class CCTVRecorder(threading.Thread):
         self.ffmpeg_stderr_file.write("=" * 100 + "\n")
 
         self.logger.info("Starting FFmpeg. stderr log: %s", stderr_path)
-        self.logger.info("Output container: %s", self.config.video_container)
-        self.logger.info("Transport mode: %s", self.config.ffmpeg_transport_mode)
+        self.logger.info("Output container: %s", self.config.recorder.video_container)
+        self.logger.info("Transport mode: %s", self.config.recorder.ffmpeg_transport_mode)
 
         creationflags = 0
         if os.name == "nt":
@@ -442,13 +448,13 @@ class CCTVRecorder(threading.Thread):
             if self.is_video_stale():
                 self.logger.warning(
                     "No recent valid video file detected in the last %s seconds.",
-                    self.config.stale_file_seconds,
+                    self.config.recorder.stale_file_seconds,
                 )
                 self.log_recent_ffmpeg_stderr()
                 self.stop_ffmpeg()
                 return
 
-            self.stop_event.wait(self.config.health_check_seconds)
+            self.stop_event.wait(self.config.recorder.health_check_seconds)
 
     def get_latest_video_stat(self) -> tuple[Path, os.stat_result] | None:
         video_root = self.current_video_dir()
@@ -499,17 +505,17 @@ class CCTVRecorder(threading.Thread):
             if self.last_restart_at is None:
                 return False
             age_since_restart = (now_local() - self.last_restart_at).total_seconds()
-            return age_since_restart > self.config.stale_file_seconds
+            return age_since_restart > self.config.recorder.stale_file_seconds
 
         latest, stat = res
         age = time.time() - stat.st_mtime
 
         # Jangan menilai file yang sedang aktif ditulis.
-        if age > self.config.stale_file_seconds and stat.st_size < 100 * 1024:
+        if age > self.config.recorder.stale_file_seconds and stat.st_size < 100 * 1024:
             self.logger.warning("Latest file is too small: %s | %s bytes", latest, stat.st_size)
             return True
 
-        return age > self.config.stale_file_seconds
+        return age > self.config.recorder.stale_file_seconds
 
     def log_recent_ffmpeg_stderr(self, lines: int = 30) -> None:
         path = self.stderr_path()

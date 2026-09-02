@@ -28,20 +28,20 @@ class DiskMonitor(threading.Thread):
             except Exception as exc:
                 self.logger.exception("Disk monitor error: %s", exc)
 
-            self.stop_event.wait(self.config.disk_check_seconds)
+            self.stop_event.wait(self.config.storage.disk_check_seconds)
 
         self.logger.info("Disk monitor stopped.")
 
     def check_disk(self) -> None:
-        ensure_dir(self.config.output_root)
-        usage = shutil.disk_usage(self.config.output_root)
+        ensure_dir(self.config.storage.output_root)
+        usage = shutil.disk_usage(self.config.storage.output_root)
         free_gb = usage.free / (1024**3)
 
-        if free_gb < self.config.min_free_space_gb:
+        if free_gb < self.config.storage.min_free_space_gb:
             self.logger.warning(
                 "Low disk space: %.2f GB free. Minimum configured: %.2f GB.",
                 free_gb,
-                self.config.min_free_space_gb,
+                self.config.storage.min_free_space_gb,
             )
             self.emergency_purge(usage)
         else:
@@ -49,12 +49,12 @@ class DiskMonitor(threading.Thread):
 
     def emergency_purge(self, initial_usage: Any = None) -> None:
         """Delete oldest complete date directories until the disk is safe again."""
-        usage = initial_usage or shutil.disk_usage(self.config.output_root)
+        usage = initial_usage or shutil.disk_usage(self.config.storage.output_root)
         today = now_local().date()
         candidates: list[tuple[date, Path]] = []
 
         try:
-            with os.scandir(self.config.output_root) as it:
+            with os.scandir(self.config.storage.output_root) as it:
                 for entry in it:
                     if not entry.is_dir():
                         continue
@@ -67,7 +67,7 @@ class DiskMonitor(threading.Thread):
 
         candidates.sort(key=lambda item: item[0])
         for _, target in candidates:
-            if usage.free / (1024**3) >= self.config.min_free_space_gb:
+            if usage.free / (1024**3) >= self.config.storage.min_free_space_gb:
                 return
 
             self.logger.warning("Emergency low-disk purge deleting footage folder: %s", target)
@@ -75,22 +75,22 @@ class DiskMonitor(threading.Thread):
                 shutil.rmtree(target)
             except OSError as exc:
                 self.logger.warning("Emergency purge failed for %s: %s", target, exc)
-            usage = shutil.disk_usage(self.config.output_root)
+            usage = shutil.disk_usage(self.config.storage.output_root)
 
-        if usage.free / (1024**3) < self.config.min_free_space_gb:
+        if usage.free / (1024**3) < self.config.storage.min_free_space_gb:
             self.logger.warning(
                 "Emergency purge could not reach configured free space; %.2f GB remains.",
                 usage.free / (1024**3),
             )
 
     def cleanup_old_folders(self) -> None:
-        cutoff_date = now_local().date() - timedelta(days=self.config.retention_days)
+        cutoff_date = now_local().date() - timedelta(days=self.config.storage.retention_days)
 
-        if not self.config.output_root.exists():
+        if not self.config.storage.output_root.exists():
             return
 
         try:
-            with os.scandir(self.config.output_root) as it:
+            with os.scandir(self.config.storage.output_root) as it:
                 for entry in it:
                     if not entry.is_dir() or entry.name in {"logs", "status"}:
                         continue
@@ -106,15 +106,15 @@ class DiskMonitor(threading.Thread):
         except OSError as exc:
             self.logger.warning("Error during disk cleanup scan: %s", exc)
 
-        self.cleanup_old_files(self.config.output_root / "logs")
-        self.cleanup_old_files(self.config.output_root / "status")
+        self.cleanup_old_files(self.config.storage.output_root / "logs")
+        self.cleanup_old_files(self.config.storage.output_root / "status")
 
     def cleanup_old_files(self, directory: Path) -> None:
         """Prune aged logs and status files without following links."""
         if not directory.is_dir():
             return
 
-        cutoff_ts = time.time() - self.config.retention_days * 24 * 60 * 60
+        cutoff_ts = time.time() - self.config.storage.retention_days * 24 * 60 * 60
         for root, _, filenames in os.walk(directory, followlinks=False):
             for filename in filenames:
                 path = Path(root) / filename

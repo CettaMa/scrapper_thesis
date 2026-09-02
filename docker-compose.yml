@@ -4,6 +4,18 @@ services:
     image: cctv-scraper:latest
     container_name: cctv-scraper
     restart: unless-stopped
+    healthcheck:
+      # A healthy process must keep producing dataset/log/status files. Killing PID 1
+      # makes the existing restart policy recover a hung-but-alive container.
+      test:
+        - CMD-SHELL
+        - >-
+          find /app/dataset -type f -mmin -5 -print -quit | grep -q . ||
+          (echo 'no recent dataset writes' >&2; kill -TERM 1; exit 1)
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     devices:
       - /dev/dri:/dev/dri
     extra_hosts:

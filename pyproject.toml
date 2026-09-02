@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cctv-scraper"
 version = "1.0.0"
-description = "24x7 CCTV stream scraper, metadata collector, encoder, and Drive uploader"
+description = "24x7 CCTV stream scraper, metadata collector, and local archive encoder"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -21,6 +21,9 @@ dev = [
     "mypy>=1.10.0",
     "types-requests>=2.32.0.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["cctv_scraper*"]
 
 [tool.ruff]
 target-version = "py310"

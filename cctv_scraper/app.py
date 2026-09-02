@@ -22,8 +22,8 @@ def _archive_with_encoder(config: RuntimeConfig, encoder: str) -> RuntimeConfig:
 
 
 def _hardware_probe_command(config: RuntimeConfig) -> list[str]:
-    encoder = config.archive_video_encoder
-    device = config.archive_vaapi_device
+    encoder = config.archive.video_encoder
+    device = config.archive.vaapi_device
     device_option = "-vaapi_device" if encoder.endswith("vaapi") else "-qsv_device"
     return [
         "ffmpeg",
@@ -70,12 +70,12 @@ def validate_video_encoder(config: RuntimeConfig) -> RuntimeConfig:
     """
     required_encoders: set[str] = set()
     recorder_encoders: set[str] = set()
-    if config.ffmpeg_transport_mode in {"smooth", "transcode"}:
-        required_encoders.add(config.video_encoder)
-        recorder_encoders.add(config.video_encoder)
-    archive_hardware = config.archive_video_encoder in HARDWARE_ENCODERS
-    if config.archive_encoder_enabled:
-        required_encoders.add(config.archive_video_encoder)
+    if config.recorder.ffmpeg_transport_mode in {"smooth", "transcode"}:
+        required_encoders.add(config.recorder.video_encoder)
+        recorder_encoders.add(config.recorder.video_encoder)
+    archive_hardware = config.archive.video_encoder in HARDWARE_ENCODERS
+    if config.archive.enabled:
+        required_encoders.add(config.archive.video_encoder)
         if archive_hardware:
             required_encoders.add(config.archive.fallback_video_encoder)
 
@@ -98,15 +98,15 @@ def validate_video_encoder(config: RuntimeConfig) -> RuntimeConfig:
     missing = sorted(encoder for encoder in required_encoders if encoder not in result.stdout)
     fallback = config.archive.fallback_video_encoder
     archive_can_fallback = (
-        config.archive_encoder_enabled
+        config.archive.enabled
         and archive_hardware
-        and config.archive_video_encoder not in recorder_encoders
+        and config.archive.video_encoder not in recorder_encoders
         and fallback not in missing
     )
     unrecoverable = [
         encoder
         for encoder in missing
-        if not (archive_can_fallback and encoder == config.archive_video_encoder)
+        if not (archive_can_fallback and encoder == config.archive.video_encoder)
     ]
     if unrecoverable:
         raise RuntimeError(
@@ -117,10 +117,10 @@ def validate_video_encoder(config: RuntimeConfig) -> RuntimeConfig:
     if not archive_can_fallback:
         return config
 
-    if config.archive_video_encoder in missing:
+    if config.archive.video_encoder in missing:
         logging.getLogger("app").warning(
             "Archive encoder %s is not compiled into FFmpeg; using fallback %s for this process.",
-            config.archive_video_encoder,
+            config.archive.video_encoder,
             fallback,
         )
         return _archive_with_encoder(config, fallback)
@@ -131,8 +131,8 @@ def validate_video_encoder(config: RuntimeConfig) -> RuntimeConfig:
         probe_error = str(exc)
         logging.getLogger("app").warning(
             "Archive hardware encoder %s could not use device %s; using fallback %s: %s",
-            config.archive_video_encoder,
-            config.archive_vaapi_device,
+            config.archive.video_encoder,
+            config.archive.vaapi_device,
             fallback,
             probe_error,
         )
@@ -143,8 +143,8 @@ def validate_video_encoder(config: RuntimeConfig) -> RuntimeConfig:
         detail = " | ".join(stderr[-3:])
         logging.getLogger("app").warning(
             "Archive hardware encoder %s could not use device %s; using fallback %s%s",
-            config.archive_video_encoder,
-            config.archive_vaapi_device,
+            config.archive.video_encoder,
+            config.archive.vaapi_device,
             fallback,
             f": {detail}" if detail else ".",
         )
@@ -161,9 +161,9 @@ class CCTVApp:
 
     def start(self) -> None:
         setup_logging(
-            self.config.output_root,
-            self.config.log_max_bytes,
-            self.config.log_backup_count,
+            self.config.storage.output_root,
+            self.config.storage.log_max_bytes,
+            self.config.storage.log_backup_count,
         )
         self.config = validate_video_encoder(self.config)
 
@@ -172,71 +172,74 @@ class CCTVApp:
 
         logging.info("CCTV 24x7 Scraper starting.")
         logging.info("Total CCTV points: %s", len(points))
-        logging.info("Output root: %s", self.config.output_root.resolve())
-        logging.info("Segment duration: %s seconds", self.config.segment_seconds)
-        logging.info("Video container: %s", self.config.video_container)
-        logging.info("FFmpeg transport mode: %s", self.config.ffmpeg_transport_mode)
-        logging.info("FFmpeg referer: %s", self.config.ffmpeg_referer or "-")
-        logging.info("FFmpeg origin: %s", self.config.ffmpeg_origin or "-")
-        logging.info("HLS reconnect at EOF: %s", self.config.hls_reconnect_at_eof)
-        logging.info("Segment at clock time: %s", self.config.segment_atclocktime)
-        logging.info("HLS live start index: %s", self.config.hls_live_start_index)
+        logging.info("Output root: %s", self.config.storage.output_root.resolve())
+        logging.info("Segment duration: %s seconds", self.config.recorder.segment_seconds)
+        logging.info("Video container: %s", self.config.recorder.video_container)
+        logging.info("FFmpeg transport mode: %s", self.config.recorder.ffmpeg_transport_mode)
+        logging.info("FFmpeg referer: %s", self.config.recorder.ffmpeg_referer or "-")
+        logging.info("FFmpeg origin: %s", self.config.recorder.ffmpeg_origin or "-")
+        logging.info("HLS reconnect at EOF: %s", self.config.recorder.hls_reconnect_at_eof)
+        logging.info("Segment at clock time: %s", self.config.recorder.segment_atclocktime)
+        logging.info("HLS live start index: %s", self.config.recorder.hls_live_start_index)
         logging.info(
             "FFmpeg reconnect on HTTP error: %s",
-            self.config.ffmpeg_reconnect_on_http_error,
+            self.config.recorder.ffmpeg_reconnect_on_http_error,
         )
-        logging.info("Output FPS: %s", self.config.output_fps)
-        logging.info("Transcode preset: %s", self.config.transcode_preset)
-        logging.info("Video encoder: %s", self.config.video_encoder)
-        logging.info("Target bitrate: %s", self.config.target_bitrate)
-        logging.info("Maximum bitrate: %s", self.config.max_bitrate)
-        logging.info("Buffer size: %s", self.config.buffer_size)
-        logging.info("Output height: %s", self.config.output_height or "source")
-        logging.info("Archive encoder enabled: %s", self.config.archive_encoder_enabled)
-        logging.info("Archive interval: %s seconds", self.config.archive_interval_seconds)
-        logging.info("Archive scan interval: %s seconds", self.config.archive_scan_seconds)
-        logging.info("Archive safe age: %s seconds", self.config.archive_safe_age_seconds)
+        logging.info("Output FPS: %s", self.config.recorder.output_fps)
+        logging.info("Transcode preset: %s", self.config.recorder.transcode_preset)
+        logging.info("Video encoder: %s", self.config.recorder.video_encoder)
+        logging.info("Target bitrate: %s", self.config.recorder.target_bitrate)
+        logging.info("Maximum bitrate: %s", self.config.recorder.max_bitrate)
+        logging.info("Buffer size: %s", self.config.recorder.buffer_size)
+        logging.info("Output height: %s", self.config.recorder.output_height or "source")
+        logging.info("Archive encoder enabled: %s", self.config.archive.enabled)
+        logging.info("Archive interval: %s seconds", self.config.archive.interval_seconds)
+        logging.info("Archive scan interval: %s seconds", self.config.archive.scan_seconds)
+        logging.info("Archive safe age: %s seconds", self.config.archive.safe_age_seconds)
         logging.info(
             "Archive delete raw after success: %s",
-            self.config.archive_delete_raw_after_success,
+            self.config.archive.delete_raw_after_success,
         )
-        logging.info("Archive video encoder: %s", self.config.archive_video_encoder)
-        logging.info("Archive VA-API/QSV device: %s", self.config.archive_vaapi_device)
-        logging.info("Archive retry max attempts: %s", self.config.archive_max_attempts)
-        logging.info("Archive target bitrate: %s", self.config.archive_target_bitrate)
-        logging.info("Archive maximum bitrate: %s", self.config.archive_max_bitrate)
-        logging.info("Preflight check: %s", self.config.preflight_check)
-        logging.info("Offline retry seconds: %s", self.config.offline_retry_seconds)
-        logging.info("Network retry seconds: %s", self.config.network_retry_seconds)
+        logging.info("Archive video encoder: %s", self.config.archive.video_encoder)
+        logging.info("Archive VA-API/QSV device: %s", self.config.archive.vaapi_device)
+        logging.info("Archive retry max attempts: %s", self.config.archive.max_attempts)
+        logging.info("Archive target bitrate: %s", self.config.archive.target_bitrate)
+        logging.info("Archive maximum bitrate: %s", self.config.archive.max_bitrate)
+        logging.info("Preflight check: %s", self.config.network.preflight_check)
+        logging.info("Offline retry seconds: %s", self.config.network.offline_retry_seconds)
+        logging.info("Network retry seconds: %s", self.config.network.network_retry_seconds)
         logging.info(
             "Metadata CSV write interval: %s seconds",
-            self.config.metadata_interval_seconds,
+            self.config.metadata.metadata_interval_seconds,
         )
-        logging.info("TomTom API interval: %s seconds", self.config.tomtom_interval_seconds)
+        logging.info(
+            "TomTom API interval: %s seconds", self.config.metadata.tomtom_interval_seconds
+        )
         logging.info(
             "Open-Meteo API interval: %s seconds",
-            self.config.openmeteo_interval_seconds,
+            self.config.metadata.openmeteo_interval_seconds,
         )
         logging.info(
             "Metadata minimum pass interval: %s seconds",
-            self.config.metadata_min_pass_interval_seconds,
+            self.config.metadata.min_pass_interval_seconds,
         )
         logging.info(
             "Expired URL escalation threshold: %s failures",
-            self.config.expired_url_escalation_threshold,
+            self.config.network.expired_url_escalation_threshold,
         )
-        logging.info("Retention days: %s", self.config.retention_days)
-        logging.info("Minimum free disk: %.2f GB", self.config.min_free_space_gb)
-        logging.info("Log max bytes: %s", self.config.log_max_bytes)
-        logging.info("Log backup count: %s", self.config.log_backup_count)
+        logging.info("Retention days: %s", self.config.storage.retention_days)
+        logging.info("Minimum free disk: %.2f GB", self.config.storage.min_free_space_gb)
+        logging.info("Log max bytes: %s", self.config.storage.log_max_bytes)
+        logging.info("Log backup count: %s", self.config.storage.log_backup_count)
 
-        if not self.config.tomtom_api_key:
+        if not self.config.metadata.tomtom_api_key:
             logging.warning("TOMTOM_API not found. TomTom metadata will be empty.")
 
         fallback_points = [
             p.name
             for p in points
-            if p.lat == self.config.default_lat and p.lon == self.config.default_lon
+            if p.lat == self.config.metadata.default_lat
+            and p.lon == self.config.metadata.default_lon
         ]
         if fallback_points:
             logging.warning(

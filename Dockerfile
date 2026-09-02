@@ -59,9 +59,8 @@ COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY cctv_points.csv ./
 
 # Create host-matching render/video groups and assign appuser
-RUN groupadd -g 991 render 2>/dev/null || true \
-    && useradd --create-home --shell /usr/sbin/nologin appuser \
-    && usermod -aG video,render appuser \
+RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+    && usermod -aG video appuser \
     && chmod +x /usr/local/bin/test-vaapi /usr/local/bin/docker-entrypoint.sh \
     && mkdir -p /app/dataset \
     && chown -R appuser:appuser /app

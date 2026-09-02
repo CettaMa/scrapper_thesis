@@ -40,9 +40,9 @@ def test_load_runtime_config_defaults(tmp_path: Path):
     assert isinstance(cfg.network, NetworkConfig)
 
     assert cfg.config_file == Path(DEFAULT_CONFIG_FILE)
-    assert cfg.output_root == Path(DEFAULT_OUTPUT_ROOT)
-    assert cfg.segment_seconds == DEFAULT_SEGMENT_SECONDS
-    assert cfg.retention_days == DEFAULT_RETENTION_DAYS
+    assert cfg.storage.output_root == Path(DEFAULT_OUTPUT_ROOT)
+    assert cfg.recorder.segment_seconds == DEFAULT_SEGMENT_SECONDS
+    assert cfg.storage.retention_days == DEFAULT_RETENTION_DAYS
     assert cfg.recorder.video_container == "ts"
     assert cfg.recorder.ffmpeg_transport_mode == "copy"
     assert cfg.recorder.video_encoder == "hevc_nvenc"
@@ -128,11 +128,11 @@ def test_load_runtime_config_cli_overrides_env(tmp_path: Path):
         cfg = load_runtime_config(args)
 
     assert cfg.config_file == Path("custom_points.csv")
-    assert cfg.output_root == Path("custom_dataset")
-    assert cfg.segment_seconds == 45
-    assert cfg.retention_days == 3
-    assert cfg.min_free_space_gb == pytest.approx(10.0)
-    assert cfg.video_container == "mp4"
+    assert cfg.storage.output_root == Path("custom_dataset")
+    assert cfg.recorder.segment_seconds == 45
+    assert cfg.storage.retention_days == 3
+    assert cfg.storage.min_free_space_gb == pytest.approx(10.0)
+    assert cfg.recorder.video_container == "mp4"
 
 
 def test_load_runtime_config_validation_errors():

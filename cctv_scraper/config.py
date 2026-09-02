@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 # - METADATA_INTERVAL_SECONDS: 60 (code default)
 # - OPENMETEO_INTERVAL_SECONDS: 60 (code default)
 # - VIDEO_ENCODER: "hevc_nvenc" (code default)
-# - ARCHIVE_VIDEO_ENCODER: "hevc_nvenc" (code default)
+# - ARCHIVE_VIDEO_ENCODER: "h264_vaapi" (code default)
 # - ARCHIVE_ENCODER_ENABLED: True (code default)
 
 DEFAULT_CONFIG_FILE = "cctv_points.csv"
@@ -144,247 +144,6 @@ class RuntimeConfig:
     archive: ArchiveConfig
     storage: StorageConfig
     network: NetworkConfig
-
-    # Backward-compatible property accessors
-    @property
-    def output_root(self) -> Path:
-        return self.storage.output_root
-
-    @property
-    def segment_seconds(self) -> int:
-        return self.recorder.segment_seconds
-
-    @property
-    def restart_delay_seconds(self) -> int:
-        return self.recorder.restart_delay_seconds
-
-    @property
-    def health_check_seconds(self) -> int:
-        return self.recorder.health_check_seconds
-
-    @property
-    def stale_file_seconds(self) -> int:
-        return self.recorder.stale_file_seconds
-
-    @property
-    def metadata_interval_seconds(self) -> int:
-        return self.metadata.metadata_interval_seconds
-
-    @property
-    def tomtom_interval_seconds(self) -> int:
-        return self.metadata.tomtom_interval_seconds
-
-    @property
-    def openmeteo_interval_seconds(self) -> int:
-        return self.metadata.openmeteo_interval_seconds
-
-    @property
-    def metadata_min_pass_interval_seconds(self) -> int:
-        return self.metadata.min_pass_interval_seconds
-
-    @property
-    def metadata_failure_backoff_base_seconds(self) -> int:
-        return self.metadata.failure_backoff_base_seconds
-
-    @property
-    def metadata_failure_backoff_max_seconds(self) -> int:
-        return self.metadata.failure_backoff_max_seconds
-
-    @property
-    def disk_check_seconds(self) -> int:
-        return self.storage.disk_check_seconds
-
-    @property
-    def retention_days(self) -> int:
-        return self.storage.retention_days
-
-    @property
-    def min_free_space_gb(self) -> float:
-        return self.storage.min_free_space_gb
-
-    @property
-    def log_max_bytes(self) -> int:
-        return self.storage.log_max_bytes
-
-    @property
-    def log_backup_count(self) -> int:
-        return self.storage.log_backup_count
-
-    @property
-    def tomtom_api_key(self) -> str | None:
-        return self.metadata.tomtom_api_key
-
-    @property
-    def default_lat(self) -> float:
-        return self.metadata.default_lat
-
-    @property
-    def default_lon(self) -> float:
-        return self.metadata.default_lon
-
-    @property
-    def video_container(self) -> str:
-        return self.recorder.video_container
-
-    @property
-    def ffmpeg_loglevel(self) -> str:
-        return self.recorder.ffmpeg_loglevel
-
-    @property
-    def ffmpeg_transport_mode(self) -> str:
-        return self.recorder.ffmpeg_transport_mode
-
-    @property
-    def ffmpeg_user_agent(self) -> str:
-        return self.recorder.ffmpeg_user_agent
-
-    @property
-    def ffmpeg_referer(self) -> str:
-        return self.recorder.ffmpeg_referer
-
-    @property
-    def ffmpeg_origin(self) -> str:
-        return self.recorder.ffmpeg_origin
-
-    @property
-    def ffmpeg_analyzeduration(self) -> str:
-        return self.recorder.ffmpeg_analyzeduration
-
-    @property
-    def ffmpeg_probesize(self) -> str:
-        return self.recorder.ffmpeg_probesize
-
-    @property
-    def hls_reconnect_at_eof(self) -> bool:
-        return self.recorder.hls_reconnect_at_eof
-
-    @property
-    def segment_atclocktime(self) -> bool:
-        return self.recorder.segment_atclocktime
-
-    @property
-    def hls_live_start_index(self) -> str:
-        return self.recorder.hls_live_start_index
-
-    @property
-    def ffmpeg_rw_timeout(self) -> str:
-        return self.recorder.ffmpeg_rw_timeout
-
-    @property
-    def ffmpeg_reconnect_delay_max(self) -> str:
-        return self.recorder.ffmpeg_reconnect_delay_max
-
-    @property
-    def ffmpeg_reconnect_on_http_error(self) -> str:
-        return self.recorder.ffmpeg_reconnect_on_http_error
-
-    @property
-    def output_fps(self) -> int:
-        return self.recorder.output_fps
-
-    @property
-    def transcode_preset(self) -> str:
-        return self.recorder.transcode_preset
-
-    @property
-    def segment_keyframe_seconds(self) -> int:
-        return self.recorder.segment_keyframe_seconds
-
-    @property
-    def video_encoder(self) -> str:
-        return self.recorder.video_encoder
-
-    @property
-    def target_bitrate(self) -> str:
-        return self.recorder.target_bitrate
-
-    @property
-    def max_bitrate(self) -> str:
-        return self.recorder.max_bitrate
-
-    @property
-    def buffer_size(self) -> str:
-        return self.recorder.buffer_size
-
-    @property
-    def output_height(self) -> int:
-        return self.recorder.output_height
-
-    @property
-    def archive_encoder_enabled(self) -> bool:
-        return self.archive.enabled
-
-    @property
-    def archive_interval_seconds(self) -> int:
-        return self.archive.interval_seconds
-
-    @property
-    def archive_scan_seconds(self) -> int:
-        return self.archive.scan_seconds
-
-    @property
-    def archive_safe_age_seconds(self) -> int:
-        return self.archive.safe_age_seconds
-
-    @property
-    def archive_delete_raw_after_success(self) -> bool:
-        return self.archive.delete_raw_after_success
-
-    @property
-    def archive_video_encoder(self) -> str:
-        return self.archive.video_encoder
-
-    @property
-    def archive_preset(self) -> str:
-        return self.archive.preset
-
-    @property
-    def archive_target_bitrate(self) -> str:
-        return self.archive.target_bitrate
-
-    @property
-    def archive_max_bitrate(self) -> str:
-        return self.archive.max_bitrate
-
-    @property
-    def archive_buffer_size(self) -> str:
-        return self.archive.buffer_size
-
-    @property
-    def archive_output_height(self) -> int:
-        return self.archive.output_height
-
-    @property
-    def archive_vaapi_device(self) -> str:
-        return self.archive.vaapi_device
-
-    @property
-    def archive_retry_base_seconds(self) -> int:
-        return self.archive.retry_base_seconds
-
-    @property
-    def archive_retry_max_seconds(self) -> int:
-        return self.archive.retry_max_seconds
-
-    @property
-    def archive_max_attempts(self) -> int:
-        return self.archive.max_attempts
-
-    @property
-    def preflight_check(self) -> bool:
-        return self.network.preflight_check
-
-    @property
-    def offline_retry_seconds(self) -> int:
-        return self.network.offline_retry_seconds
-
-    @property
-    def network_retry_seconds(self) -> int:
-        return self.network.network_retry_seconds
-
-    @property
-    def expired_url_escalation_threshold(self) -> int:
-        return self.network.expired_url_escalation_threshold
 
 
 # =========================================================
@@ -747,15 +506,15 @@ def load_cctv_points(config: RuntimeConfig) -> list[CCTVPoint]:
                 if not is_http_url(url):
                     raise ValueError(f"URL CCTV tidak valid untuk '{name}': {url}")
 
-                lat = row.get("lat") or row.get("latitude") or config.default_lat
-                lon = row.get("lon") or row.get("longitude") or config.default_lon
+                lat = row.get("lat") or row.get("latitude") or config.metadata.default_lat
+                lon = row.get("lon") or row.get("longitude") or config.metadata.default_lon
 
                 points.append(
                     CCTVPoint(
                         name=point_name,
                         url=url,
-                        lat=parse_coordinate(lat, config.default_lat),
-                        lon=parse_coordinate(lon, config.default_lon),
+                        lat=parse_coordinate(lat, config.metadata.default_lat),
+                        lon=parse_coordinate(lon, config.metadata.default_lon),
                     )
                 )
         else:
@@ -780,8 +539,8 @@ def load_cctv_points(config: RuntimeConfig) -> list[CCTVPoint]:
                     CCTVPoint(
                         name=point_name,
                         url=url,
-                        lat=config.default_lat,
-                        lon=config.default_lon,
+                        lat=config.metadata.default_lat,
+                        lon=config.metadata.default_lon,
                     )
                 )
 

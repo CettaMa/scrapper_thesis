@@ -49,9 +49,9 @@ Where hardcoded defaults in the codebase differed from `.env.example`, the code 
 | `SEGMENT_SECONDS` | `60` | `28` | Reconciled `.env.example` to `60` |
 | `METADATA_INTERVAL_SECONDS` | `60` | `300` | Reconciled `.env.example` to `60` |
 | `OPENMETEO_INTERVAL_SECONDS` | `60` | `300` | Reconciled `.env.example` to `60` |
-| `VIDEO_ENCODER` | `"hevc_nvenc"` | `"libx264"` | Reconciled `.env.example` to `"hevc_nvenc"` |
+| `VIDEO_ENCODER` | `"hevc_nvenc"` | `"libx264"` | Intel-only `.env.example` uses `h264_qsv`; the code default remains `hevc_nvenc` for backwards compatibility |
 | `ARCHIVE_ENCODER_ENABLED` | `True` | `false` | Reconciled `.env.example` to `true` |
-| `ARCHIVE_VIDEO_ENCODER` | `"hevc_nvenc"` | `"libx264"` | Reconciled `.env.example` to `"hevc_nvenc"` |
+| `ARCHIVE_VIDEO_ENCODER` | `"h264_vaapi"` | `"libx264"` | Reconciled `.env.example` to `"h264_vaapi"`; startup falls back to `libx264` if the Intel device is unavailable |
 
 ---
 
@@ -68,12 +68,12 @@ Where hardcoded defaults in the codebase differed from `.env.example`, the code 
 All checks run with zero warnings/errors on Python 3.10 / 3.12:
 
 - **Ruff Linter**: `ruff check .` -> `All checks passed!`
-- **Ruff Formatter**: `ruff format --check .` -> `18 files already formatted`
-- **Mypy Type Checker**: `mypy` -> `Success: no issues found in 17 source files`
-- **Pytest**: `pytest` -> `24 passed in 0.35s`
+- **Ruff Formatter**: `ruff format --check .` -> all files already formatted
+- **Mypy Type Checker**: `mypy` -> `Success: no issues found in 16 source files`
+- **Pytest**: `python -m pytest -q` -> `39 passed`
 
 ### Test Suites Included:
-- `tests/test_characterization.py`: FFmpeg argv byte-exact equality across copy/transcode/NVENC/libx264/ts/mp4, CSV parser variants, coordinate regex handling, duplicate/invalid URL rejections, archive windowing, and local retention behavior.
+- `tests/test_characterization.py`: FFmpeg argv byte-exact equality across copy/transcode/NVENC/libx264/ts/mp4, CSV parser variants, coordinate regex handling, duplicate/invalid URL rejections, archive windowing, archive provenance manifests, and local retention behavior.
 - `tests/test_config.py` (4 tests): Sub-config dataclass instantiation, environment overrides, CLI precedence, validation error handling.
 - `tests/test_storage_scan.py` (4 tests): Single-pass `ready_files` filtering, bounded `iter_point_date_dirs` with pending file pickup, single-pass `is_video_stale` detection, `trim_stderr`.
 - `tests/test_doh_and_network.py` (4 tests): Negative DNS caching, positive DoH caching, FIFO cache eviction, `MetadataCollector` session reuse and cache interval verification.
