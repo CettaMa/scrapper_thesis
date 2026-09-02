@@ -57,7 +57,7 @@ COPY scripts/test_vaapi.sh /usr/local/bin/test-vaapi
 COPY cctv_points.csv ./
 
 RUN chmod +x /usr/local/bin/test-vaapi \
-    && useradd --create-home --uid 1000 --shell /usr/sbin/nologin appuser \
+    && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/dataset \
     && chown -R appuser:appuser /app
 
