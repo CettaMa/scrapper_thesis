@@ -11,7 +11,6 @@ from cctv_scraper.config import (
     DEFAULT_RETENTION_DAYS,
     DEFAULT_SEGMENT_SECONDS,
     ArchiveConfig,
-    DriveConfig,
     MetadataConfig,
     NetworkConfig,
     RecorderConfig,
@@ -37,7 +36,6 @@ def test_load_runtime_config_defaults(tmp_path: Path):
     assert isinstance(cfg.recorder, RecorderConfig)
     assert isinstance(cfg.metadata, MetadataConfig)
     assert isinstance(cfg.archive, ArchiveConfig)
-    assert isinstance(cfg.drive, DriveConfig)
     assert isinstance(cfg.storage, StorageConfig)
     assert isinstance(cfg.network, NetworkConfig)
 
@@ -49,7 +47,6 @@ def test_load_runtime_config_defaults(tmp_path: Path):
     assert cfg.recorder.ffmpeg_transport_mode == "copy"
     assert cfg.recorder.video_encoder == "hevc_nvenc"
     assert cfg.archive.enabled is True
-    assert cfg.drive.enabled is False
 
 
 def test_load_runtime_config_env_overrides(tmp_path: Path):
@@ -69,8 +66,6 @@ def test_load_runtime_config_env_overrides(tmp_path: Path):
         "OUTPUT_FPS": "25",
         "ARCHIVE_ENCODER_ENABLED": "false",
         "ARCHIVE_INTERVAL_SECONDS": "600",
-        "GOOGLE_DRIVE_UPLOAD_ENABLED": "true",
-        "GOOGLE_DRIVE_FOLDER_ID": "drive_12345",
         "RETENTION_DAYS": "14",
         "MIN_FREE_SPACE_GB": "50.5",
         "DEFAULT_LAT": "-6.123",
@@ -86,8 +81,6 @@ def test_load_runtime_config_env_overrides(tmp_path: Path):
     assert cfg.recorder.output_fps == 25
     assert cfg.archive.enabled is False
     assert cfg.archive.interval_seconds == 600
-    assert cfg.drive.enabled is True
-    assert cfg.drive.folder_id == "drive_12345"
     assert cfg.storage.retention_days == 14
     assert cfg.storage.min_free_space_gb == pytest.approx(50.5)
     assert cfg.metadata.default_lat == pytest.approx(-6.123)

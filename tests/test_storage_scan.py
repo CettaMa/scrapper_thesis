@@ -29,16 +29,12 @@ def test_ready_files_single_pass(tmp_path: Path):
     file_ready = target / "cam_01.ts"
     file_new = target / "cam_02.ts"
     file_empty = target / "cam_03.ts"
-    file_done = target / "cam_04.ts"
-    file_done_marker = target / "cam_04.ts.uploaded"
     file_dot = target / ".hidden.ts"
     file_other = target / "notes.txt"
 
     file_ready.write_bytes(b"data1")
     file_new.write_bytes(b"data2")
     file_empty.write_bytes(b"")
-    file_done.write_bytes(b"data4")
-    file_done_marker.write_text("done\n", encoding="utf-8")
     file_dot.write_bytes(b"hidden")
     file_other.write_text("notes", encoding="utf-8")
 
@@ -46,11 +42,9 @@ def test_ready_files_single_pass(tmp_path: Path):
     os.utime(file_ready, (now - 120, now - 120))  # age = 120s
     os.utime(file_new, (now - 30, now - 30))  # age = 30s
     os.utime(file_empty, (now - 120, now - 120))
-    os.utime(file_done, (now - 120, now - 120))
 
     with patch("time.time", return_value=now):
-        # min_age = 90s, skip_marker = ".uploaded"
-        res = ready_files(target, [".ts"], min_age_seconds=90, skip_marker=".uploaded")
+        res = ready_files(target, [".ts"], min_age_seconds=90)
         assert res == [file_ready]
 
 
@@ -79,12 +73,9 @@ def test_iter_point_date_dirs_bounded_and_pending_pickup(tmp_path: Path):
     (tmp_path / old_pending_str / point.name / "videos").mkdir(parents=True)
     (tmp_path / old_pending_str / point.name / "videos" / "v_old_pending.ts").write_bytes(b"123")
 
-    # Old date fully done (has .uploaded marker)
-    (tmp_path / old_done_str / point.name / "videos").mkdir(parents=True)
-    (tmp_path / old_done_str / point.name / "videos" / "v_old_done.ts").write_bytes(b"123")
-    (tmp_path / old_done_str / point.name / "videos" / "v_old_done.ts.uploaded").write_text(
-        "done", encoding="utf-8"
-    )
+    # Old date with only an archive is complete and needs no further processing.
+    (tmp_path / old_done_str / point.name / "videos_encoded").mkdir(parents=True)
+    (tmp_path / old_done_str / point.name / "videos_encoded" / "archive.mp4").write_bytes(b"123")
 
     # Logs and status dirs should be ignored
     (tmp_path / "logs").mkdir()

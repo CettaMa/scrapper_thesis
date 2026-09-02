@@ -21,7 +21,6 @@ from dotenv import load_dotenv
 # - VIDEO_ENCODER: "hevc_nvenc" (code default)
 # - ARCHIVE_VIDEO_ENCODER: "hevc_nvenc" (code default)
 # - ARCHIVE_ENCODER_ENABLED: True (code default)
-# - GOOGLE_DRIVE_UPLOAD_ENABLED: False (code default)
 
 DEFAULT_CONFIG_FILE = "cctv_points.csv"
 DEFAULT_OUTPUT_ROOT = "dataset"
@@ -104,21 +103,12 @@ class ArchiveConfig:
     safe_age_seconds: int
     delete_raw_after_success: bool
     video_encoder: str
+    fallback_video_encoder: str
     preset: str
     target_bitrate: str
     max_bitrate: str
     buffer_size: str
     output_height: int
-
-
-@dataclass(frozen=True)
-class DriveConfig:
-    enabled: bool
-    auth_file: Path
-    folder_id: str
-    scan_seconds: int
-    safe_age_seconds: int
-    delete_local_after_upload: bool
 
 
 @dataclass(frozen=True)
@@ -142,7 +132,6 @@ class RuntimeConfig:
     recorder: RecorderConfig
     metadata: MetadataConfig
     archive: ArchiveConfig
-    drive: DriveConfig
     storage: StorageConfig
     network: NetworkConfig
 
@@ -334,30 +323,6 @@ class RuntimeConfig:
     @property
     def archive_output_height(self) -> int:
         return self.archive.output_height
-
-    @property
-    def drive_upload_enabled(self) -> bool:
-        return self.drive.enabled
-
-    @property
-    def drive_auth_file(self) -> Path:
-        return self.drive.auth_file
-
-    @property
-    def drive_folder_id(self) -> str:
-        return self.drive.folder_id
-
-    @property
-    def drive_scan_seconds(self) -> int:
-        return self.drive.scan_seconds
-
-    @property
-    def drive_safe_age_seconds(self) -> int:
-        return self.drive.safe_age_seconds
-
-    @property
-    def drive_delete_local_after_upload(self) -> bool:
-        return self.drive.delete_local_after_upload
 
     @property
     def preflight_check(self) -> bool:
@@ -557,21 +522,13 @@ ARCHIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None
     ("scan_seconds", "ARCHIVE_SCAN_SECONDS", int, 60, validate_positive_number),
     ("safe_age_seconds", "ARCHIVE_SAFE_AGE_SECONDS", int, 90, validate_positive_number),
     ("delete_raw_after_success", "ARCHIVE_DELETE_RAW_AFTER_SUCCESS", bool, True, None),
-    ("video_encoder", "ARCHIVE_VIDEO_ENCODER", str, "hevc_nvenc", None),
+    ("video_encoder", "ARCHIVE_VIDEO_ENCODER", str, "h264_qsv", None),
+    ("fallback_video_encoder", "ARCHIVE_FALLBACK_ENCODER", str, "libx264", None),
     ("preset", "ARCHIVE_PRESET", str, "p4", None),
     ("target_bitrate", "ARCHIVE_TARGET_BITRATE", str, "650k", None),
     ("max_bitrate", "ARCHIVE_MAX_BITRATE", str, "900k", None),
     ("buffer_size", "ARCHIVE_BUFFER_SIZE", str, "1300k", None),
     ("output_height", "ARCHIVE_OUTPUT_HEIGHT", int, 0, None),
-]
-
-DRIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None]] = [
-    ("enabled", "GOOGLE_DRIVE_UPLOAD_ENABLED", bool, False, None),
-    ("auth_file", "GOOGLE_DRIVE_AUTH_FILE", Path, Path("secrets/token.json"), None),
-    ("folder_id", "GOOGLE_DRIVE_FOLDER_ID", str, "", None),
-    ("scan_seconds", "GOOGLE_DRIVE_SCAN_SECONDS", int, 60, validate_positive_number),
-    ("safe_age_seconds", "GOOGLE_DRIVE_SAFE_AGE_SECONDS", int, 90, validate_positive_number),
-    ("delete_local_after_upload", "GOOGLE_DRIVE_DELETE_LOCAL_AFTER_UPLOAD", bool, False, None),
 ]
 
 STORAGE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None]] = [
@@ -651,7 +608,6 @@ def load_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
     metadata_config = MetadataConfig(**metadata_dict)
 
     archive_config = ArchiveConfig(**_load_specs(ARCHIVE_SPECS))
-    drive_config = DriveConfig(**_load_specs(DRIVE_SPECS))
 
     storage_dict = _load_specs(STORAGE_SPECS)
     storage_dict["output_root"] = output_root
@@ -666,7 +622,6 @@ def load_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
         recorder=recorder_config,
         metadata=metadata_config,
         archive=archive_config,
-        drive=drive_config,
         storage=storage_config,
         network=network_config,
     )

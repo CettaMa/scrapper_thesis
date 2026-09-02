@@ -46,11 +46,14 @@ h264_nvenc
 hevc_nvenc
 ```
 
-RTX 3060 Laptop can use `hevc_nvenc` and `h264_nvenc`, but not AV1 NVENC encode. Keep:
+Intel QuickSync can use `h264_qsv` or `hevc_qsv` when FFmpeg and the host expose the Intel media device. Use:
 
 ```env
-ARCHIVE_VIDEO_ENCODER=hevc_nvenc
+ARCHIVE_VIDEO_ENCODER=h264_qsv
+ARCHIVE_PRESET=veryfast
 ```
+
+On Linux Docker hosts, the compose file exposes `/dev/dri`; install a matching Intel media driver on the host and ensure the container user can access the device. On Windows, validate `h264_qsv` with the native FFmpeg installation or Docker Desktop GPU support before deployment. If QuickSync initialization fails, the archive worker retries with `ARCHIVE_FALLBACK_ENCODER` (default `libx264`) instead of losing the window.
 
 ## Data And Config
 
@@ -61,40 +64,23 @@ Runtime mounts:
 ```text
 ./dataset -> /app/dataset
 ./cctv_points.csv -> /app/cctv_points.csv
-./secrets -> /app/secrets
 ```
 
 Runtime env:
 
 ```text
-.env -> container environment
+.env -> container environment (local recording configuration only)
 TZ=Asia/Jakarta -> container timezone
 ```
 
-## Google Drive Upload
+## Local Video Storage
 
-1. Create a Google Cloud service account.
-2. Download its JSON key.
-3. Put the key at:
+Google Drive uploading has been removed. All recordings remain in the local dataset directory:
 
 ```text
-secrets/google-service-account.json
+dataset/<date>/<camera>/videos/*.ts
+dataset/<date>/<camera>/videos_encoded/*.mp4
+dataset/<date>/<camera>/metadata/*.csv
 ```
 
-4. Share the target Google Drive folder with the service account email.
-5. Put the target folder ID into `.env`:
-
-```env
-GOOGLE_DRIVE_UPLOAD_ENABLED=true
-GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE=/app/secrets/google-service-account.json
-GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id
-GOOGLE_DRIVE_DELETE_LOCAL_AFTER_UPLOAD=false
-```
-
-Uploaded raw `.ts` files are placed in Drive as:
-
-```text
-<root folder>/<date>/<camera>/videos/<file>.ts
-```
-
-If `GOOGLE_DRIVE_DELETE_LOCAL_AFTER_UPLOAD=false`, local `.ts` files stay on disk and a `.uploaded` marker prevents duplicate uploads.
+The Docker compose configuration mounts `./dataset` to `/app/dataset`, so files remain available on the host. Set `ARCHIVE_DELETE_RAW_AFTER_SUCCESS=true` to remove raw `.ts` segments after successful local MP4 archiving, or set it to `false` to retain both formats.

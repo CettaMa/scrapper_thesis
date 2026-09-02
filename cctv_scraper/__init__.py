@@ -4,7 +4,6 @@ from cctv_scraper.cli import main, parse_args
 from cctv_scraper.config import (
     ArchiveConfig,
     CCTVPoint,
-    DriveConfig,
     MetadataConfig,
     NetworkConfig,
     RecorderConfig,
@@ -16,7 +15,6 @@ from cctv_scraper.config import (
 )
 from cctv_scraper.disk import DiskMonitor
 from cctv_scraper.doh import DoHResolver
-from cctv_scraper.drive import GoogleDriveUploader
 from cctv_scraper.logging_setup import point_logger, setup_logging
 from cctv_scraper.metadata import MetadataCollector
 from cctv_scraper.recorder import CCTVRecorder
@@ -29,8 +27,6 @@ __all__ = [
     "CCTVRecorder",
     "DiskMonitor",
     "DoHResolver",
-    "DriveConfig",
-    "GoogleDriveUploader",
     "MetadataCollector",
     "MetadataConfig",
     "NetworkConfig",

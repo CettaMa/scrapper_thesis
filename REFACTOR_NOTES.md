@@ -13,8 +13,7 @@ The original 1,926-line monolith `main.py` has been decomposed into a clean, mod
 | `cctv_scraper/storage_scan.py` | High-performance `os.scandir` utilities: single-pass file scanning, cached stat reads, date directory bounding, pending work detection, stderr trimmer. |
 | `cctv_scraper/recorder.py` | `CCTVRecorder` thread managing FFmpeg subprocesses, preflight health checks, status CSV logging, and single-pass staleness detection. |
 | `cctv_scraper/metadata.py` | `MetadataCollector` daemon thread with persistent session management, caching for TomTom & Open-Meteo APIs, and periodic CSV persistence. |
-| `cctv_scraper/archive.py` | `ArchiveEncoder` thread grouping raw `.ts` segments into 5-minute concatenated MP4 files using FFmpeg NVENC/CPU encoding. |
-| `cctv_scraper/drive.py` | `GoogleDriveUploader` thread handling Google Drive API folder hierarchy creation and file uploads with `.uploaded` markers. |
+| `cctv_scraper/archive.py` | `ArchiveEncoder` thread grouping raw `.ts` segments into five-minute local MP4 files using FFmpeg QuickSync/NVENC/CPU encoding. Missing segments are not padded; available content represents the window. |
 | `cctv_scraper/disk.py` | `DiskMonitor` thread checking free storage thresholds and pruning date directories past retention limits. |
 | `cctv_scraper/doh.py` | `DoHResolver` with negative result caching, thread locks, size-bounded LRU/FIFO maps, and urllib3 connection monkeypatching. |
 | `cctv_scraper/app.py` | `CCTVApp` coordinator validating hardware/software video encoders and orchestrating worker threads. |
@@ -25,8 +24,8 @@ The original 1,926-line monolith `main.py` has been decomposed into a clean, mod
 ## 2. Efficiency Gains Achieved
 
 ### Filesystem & I/O
-- **Single-Pass Directory Scanning**: Replaced multi-stage `glob()` and redundant `os.stat()` / `Path.stat()` calls in `CCTVRecorder.latest_video_file`, `is_video_stale`, `ready_raw_files`, and `GoogleDriveUploader.ready_files` with single `os.scandir` passes. Uses cached `DirEntry.stat()` to read `st_size` and `st_mtime` without additional OS syscalls.
-- **Bounded Scan Window**: Archive and Drive upload loops now scan `today`, `yesterday`, and only older date directories that contain un-archived or un-uploaded files (detected cheaply via early-exit marker checks).
+- **Single-Pass Directory Scanning**: Replaced multi-stage `glob()` and redundant `os.stat()` / `Path.stat()` calls in recorder and archive scans with single `os.scandir` passes. Uses cached `DirEntry.stat()` to read `st_size` and `st_mtime` without additional OS syscalls.
+- **Bounded Scan Window**: Archive scans `today`, `yesterday`, and only older date directories that contain raw segments awaiting local archiving.
 - **Fast Retention Pruning**: Disk cleanup scans only date directory names via `scandir` without traversing sub-files.
 
 ### Network & DNS
@@ -53,8 +52,6 @@ Where hardcoded defaults in the codebase differed from `.env.example`, the code 
 | `VIDEO_ENCODER` | `"hevc_nvenc"` | `"libx264"` | Reconciled `.env.example` to `"hevc_nvenc"` |
 | `ARCHIVE_ENCODER_ENABLED` | `True` | `false` | Reconciled `.env.example` to `true` |
 | `ARCHIVE_VIDEO_ENCODER` | `"hevc_nvenc"` | `"libx264"` | Reconciled `.env.example` to `"hevc_nvenc"` |
-| `GOOGLE_DRIVE_UPLOAD_ENABLED` | `False` | `true` | Reconciled `.env.example` to `false` |
-| `GOOGLE_DRIVE_AUTH_FILE` | `"secrets/token.json"` | `"/app/secrets/token.json"` | Reconciled `.env.example` to `"secrets/token.json"` |
 
 ---
 
@@ -76,7 +73,7 @@ All checks run with zero warnings/errors on Python 3.10 / 3.12:
 - **Pytest**: `pytest` -> `24 passed in 0.35s`
 
 ### Test Suites Included:
-- `tests/test_characterization.py` (12 tests): FFmpeg argv byte-exact equality across copy/transcode/NVENC/libx264/ts/mp4, CSV parser variants, coordinate regex handling, duplicate/invalid URL rejections, ArchiveEncoder windowing and two-tier safe ages, GoogleDriveUploader safe ages.
+- `tests/test_characterization.py`: FFmpeg argv byte-exact equality across copy/transcode/NVENC/libx264/ts/mp4, CSV parser variants, coordinate regex handling, duplicate/invalid URL rejections, archive windowing, and local retention behavior.
 - `tests/test_config.py` (4 tests): Sub-config dataclass instantiation, environment overrides, CLI precedence, validation error handling.
 - `tests/test_storage_scan.py` (4 tests): Single-pass `ready_files` filtering, bounded `iter_point_date_dirs` with pending file pickup, single-pass `is_video_stale` detection, `trim_stderr`.
 - `tests/test_doh_and_network.py` (4 tests): Negative DNS caching, positive DoH caching, FIFO cache eviction, `MetadataCollector` session reuse and cache interval verification.

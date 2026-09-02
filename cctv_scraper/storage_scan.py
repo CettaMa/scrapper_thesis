@@ -19,11 +19,12 @@ def parse_date_dir_name(name: str) -> date | None:
 
 
 def has_pending_work(point_dir: Path) -> bool:
-    """Check whether a point directory has un-uploaded or un-archived video/metadata files."""
+    """Check whether a point has raw TS segments waiting for local archiving."""
     if not point_dir.is_dir():
         return False
 
-    subdirs = ["videos", "videos_encoded", "metadata"]
+    # Archive MP4 and metadata files are already local deliverables.
+    subdirs = ["videos"]
     for subdir_name in subdirs:
         sub_path = point_dir / subdir_name
         if not sub_path.is_dir():
@@ -31,17 +32,15 @@ def has_pending_work(point_dir: Path) -> bool:
         try:
             with os.scandir(sub_path) as it:
                 entries = list(it)
-                markers = {e.name for e in entries if e.name.endswith(".uploaded")}
                 for e in entries:
                     if not e.is_file():
                         continue
                     name = e.name
-                    if name.endswith(".uploaded") or name.startswith("."):
+                    if name.startswith("."):
                         continue
                     ext = Path(name).suffix.lower()
-                    if ext in {".ts", ".mp4", ".csv"}:
-                        if f"{name}.uploaded" not in markers:
-                            return True
+                    if ext == ".ts":
+                        return True
         except OSError:
             continue
     return False
@@ -58,7 +57,7 @@ def iter_point_date_dirs(
     Iterate date directories for a CCTV point using os.scandir.
 
     By default bounds the scan window to recent date directories (today + yesterday)
-    and any older date directory that still contains pending un-uploaded/un-archived work.
+    and any older date directory that still contains raw segments awaiting archiving.
     """
     if not root.exists():
         return []
@@ -100,15 +99,12 @@ def ready_files(
     target_dir: Path | str,
     patterns: list[str] | tuple[str, ...],
     min_age_seconds: float | dict[str, float],
-    *,
-    skip_marker: str | None = None,
 ) -> list[Path]:
     """
     Scan a directory in a single scandir pass, checking size and mtime from DirEntry.stat().
 
     - patterns: list of extensions, e.g. ['.ts', '.mp4'] or ['*.ts', '*.mp4']
     - min_age_seconds: float/int or dict mapping extension (e.g. '.csv': 86400) to min age
-    - skip_marker: if specified (e.g. '.uploaded'), files with a corresponding marker are skipped
     """
     target_path = Path(target_dir)
     if not target_path.is_dir():
@@ -122,10 +118,6 @@ def ready_files(
         with os.scandir(target_path) as it:
             entries = list(it)
 
-            markers: set[str] = set()
-            if skip_marker:
-                markers = {e.name for e in entries if e.name.endswith(skip_marker)}
-
             for entry in entries:
                 if not entry.is_file():
                     continue
@@ -134,14 +126,8 @@ def ready_files(
                 if name.startswith("."):
                     continue
 
-                if skip_marker and name.endswith(skip_marker):
-                    continue
-
                 ext = Path(name).suffix.lower()
                 if ext not in normalized_exts:
-                    continue
-
-                if skip_marker and f"{name}{skip_marker}" in markers:
                     continue
 
                 try:

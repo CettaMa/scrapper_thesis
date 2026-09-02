@@ -10,6 +10,13 @@ from cctv_scraper.storage_scan import iter_point_date_dirs, ready_files, trim_st
 
 
 class ArchiveEncoder(threading.Thread):
+    """Encode available raw content into fixed five-minute local time windows.
+
+    A window may contain less than five minutes of media when the camera was
+    unavailable. The output filename still identifies the complete window; no
+    synthetic black/silent padding is generated.
+    """
+
     def __init__(self, points: list[CCTVPoint], config: RuntimeConfig, stop_event: threading.Event):
         super().__init__(name="archive-encoder", daemon=True)
         self.points = points
@@ -99,15 +106,22 @@ class ArchiveEncoder(threading.Thread):
                 output,
             )
 
-            result = subprocess.run(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
+            result = self.run_ffmpeg(command)
+
+            if result.returncode != 0 and self.is_qsv_encoder(self.config.archive.video_encoder):
+                fallback = self.config.archive.fallback_video_encoder
+                self.logger.warning(
+                    "QuickSync archive encode failed for %s; retrying with %s | stderr=%s",
+                    output,
+                    fallback,
+                    trim_stderr(result.stderr),
+                )
+                try:
+                    tmp_output.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                command = self.build_encode_command(list_path, tmp_output, encoder=fallback)
+                result = self.run_ffmpeg(command)
 
             if result.returncode != 0:
                 self.logger.warning(
@@ -125,15 +139,8 @@ class ArchiveEncoder(threading.Thread):
             tmp_output.replace(output)
             self.logger.info("Archive saved: %s | bytes=%s", output, output.stat().st_size)
 
-            if (
-                self.config.archive_delete_raw_after_success
-                and not self.config.drive_upload_enabled
-            ):
+            if self.config.archive_delete_raw_after_success:
                 self.delete_raw_files(files)
-            elif self.config.archive_delete_raw_after_success and self.config.drive_upload_enabled:
-                self.logger.info(
-                    "Raw segments kept for Google Drive uploader: %s files", len(files)
-                )
 
         finally:
             try:
@@ -152,7 +159,24 @@ class ArchiveEncoder(threading.Thread):
                 escaped = path.resolve().as_posix().replace("'", "'\\''")
                 f.write(f"file '{escaped}'\n")
 
-    def build_encode_command(self, list_path: Path, output: Path) -> list[str]:
+    @staticmethod
+    def is_qsv_encoder(encoder: str) -> bool:
+        return encoder in {"h264_qsv", "hevc_qsv"}
+
+    def run_ffmpeg(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+    def build_encode_command(
+        self, list_path: Path, output: Path, encoder: str | None = None
+    ) -> list[str]:
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -165,6 +189,10 @@ class ArchiveEncoder(threading.Thread):
             "0",
             "-i",
             str(list_path),
+            "-fflags",
+            "+genpts",
+            "-avoid_negative_ts",
+            "make_zero",
             "-an",
         ]
 
@@ -174,7 +202,7 @@ class ArchiveEncoder(threading.Thread):
         if filters:
             cmd += ["-vf", ",".join(filters)]
 
-        encoder = self.config.archive_video_encoder
+        encoder = encoder or self.config.archive_video_encoder
         cmd += ["-c:v", encoder]
 
         if encoder in {"hevc_nvenc", "h264_nvenc"}:
@@ -183,6 +211,20 @@ class ArchiveEncoder(threading.Thread):
                 self.config.archive_preset,
                 "-rc:v",
                 "vbr",
+                "-b:v",
+                self.config.archive_target_bitrate,
+                "-maxrate:v",
+                self.config.archive_max_bitrate,
+                "-bufsize:v",
+                self.config.archive_buffer_size,
+            ]
+        elif encoder in {"h264_qsv", "hevc_qsv"}:
+            preset = self.config.archive_preset
+            if preset.startswith("p") and preset[1:].isdigit():
+                preset = "veryfast"
+            cmd += [
+                "-preset",
+                preset,
                 "-b:v",
                 self.config.archive_target_bitrate,
                 "-maxrate:v",
@@ -207,7 +249,7 @@ class ArchiveEncoder(threading.Thread):
         else:
             raise ValueError(
                 f"ARCHIVE_VIDEO_ENCODER tidak didukung: {encoder}. "
-                "Gunakan hevc_nvenc, h264_nvenc, libx265, atau libx264."
+                "Gunakan h264_qsv, hevc_qsv, hevc_nvenc, h264_nvenc, libx265, atau libx264."
             )
 
         cmd += ["-movflags", "+faststart", str(output)]

@@ -11,8 +11,6 @@ from cctv_scraper import (
     ArchiveEncoder,
     CCTVPoint,
     CCTVRecorder,
-    DriveConfig,
-    GoogleDriveUploader,
     MetadataConfig,
     NetworkConfig,
     RecorderConfig,
@@ -67,19 +65,12 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
         safe_age_seconds=90,
         delete_raw_after_success=True,
         video_encoder="hevc_nvenc",
+        fallback_video_encoder="libx264",
         preset="p4",
         target_bitrate="650k",
         max_bitrate="900k",
         buffer_size="1300k",
         output_height=0,
-    )
-    drive_defaults: dict[str, Any] = dict(
-        enabled=False,
-        auth_file=output_root / "secrets" / "token.json",
-        folder_id="",
-        scan_seconds=60,
-        safe_age_seconds=90,
-        delete_local_after_upload=False,
     )
     storage_defaults: dict[str, Any] = dict(
         output_root=output_root,
@@ -124,20 +115,6 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
             archive_defaults["buffer_size"] = v
         elif k == "archive_output_height":
             archive_defaults["output_height"] = v
-        elif k in drive_defaults:
-            drive_defaults[k] = v
-        elif k == "drive_upload_enabled":
-            drive_defaults["enabled"] = v
-        elif k == "drive_auth_file":
-            drive_defaults["auth_file"] = v
-        elif k == "drive_folder_id":
-            drive_defaults["folder_id"] = v
-        elif k == "drive_scan_seconds":
-            drive_defaults["scan_seconds"] = v
-        elif k == "drive_safe_age_seconds":
-            drive_defaults["safe_age_seconds"] = v
-        elif k == "drive_delete_local_after_upload":
-            drive_defaults["delete_local_after_upload"] = v
         elif k in storage_defaults:
             storage_defaults[k] = v
         elif k in network_defaults:
@@ -148,7 +125,6 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
         recorder=RecorderConfig(**recorder_defaults),
         metadata=MetadataConfig(**metadata_defaults),
         archive=ArchiveConfig(**archive_defaults),
-        drive=DriveConfig(**drive_defaults),
         storage=StorageConfig(**storage_defaults),
         network=NetworkConfig(**network_defaults),
     )
@@ -651,52 +627,30 @@ def test_archive_encoder_window_grouping(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 # ============================================================================
-# 4. GoogleDriveUploader.ready_files cutoff logic test
+# 4. Local archive retention behavior
 # ============================================================================
-def test_google_drive_uploader_ready_files(tmp_path: Path) -> None:
+def test_archive_uses_qsv_and_represents_sparse_window(tmp_path: Path) -> None:
     point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
-    cfg = make_dummy_config(
-        tmp_path,
-        drive_safe_age_seconds=90,
-    )
-    stop_event = threading.Event()
-    uploader = GoogleDriveUploader([point], cfg, stop_event)
+    cfg = make_dummy_config(tmp_path, archive_video_encoder="h264_qsv", archive_preset="veryfast")
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    command = encoder.build_encode_command(tmp_path / "concat.txt", tmp_path / "window.mp4")
 
-    video_dir = tmp_path / "videos"
-    video_dir.mkdir(parents=True, exist_ok=True)
-    metadata_dir = tmp_path / "metadata"
-    metadata_dir.mkdir(parents=True, exist_ok=True)
+    assert "-c:v" in command
+    assert command[command.index("-c:v") + 1] == "h264_qsv"
+    assert "-fflags" in command
+    assert "+genpts" in command
+    assert "-avoid_negative_ts" in command
+    assert "make_zero" in command
 
-    # Videos: safe age is 90s
-    v_old = video_dir / "old.ts"
-    v_new = video_dir / "new.ts"
-    v_empty = video_dir / "empty.ts"
-    v_uploaded = video_dir / "done.ts"
-    v_uploaded_marker = video_dir / "done.ts.uploaded"
 
-    v_old.write_bytes(b"content")
-    v_new.write_bytes(b"content")
-    v_empty.write_bytes(b"")
-    v_uploaded.write_bytes(b"content")
-    v_uploaded_marker.write_text("2026-06-21,file_id", encoding="utf-8")
+def test_archive_deletes_raw_files_after_success(tmp_path: Path) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(tmp_path, archive_delete_raw_after_success=True)
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    raw_files = [tmp_path / "one.ts", tmp_path / "two.ts"]
+    for path in raw_files:
+        path.write_bytes(b"content")
 
-    current_ts = 1000000.0
-    os.utime(v_old, (current_ts - 100, current_ts - 100))  # 100s old > 90s safe age
-    os.utime(v_new, (current_ts - 30, current_ts - 30))  # 30s old < 90s safe age
-    os.utime(v_empty, (current_ts - 100, current_ts - 100))
-    os.utime(v_uploaded, (current_ts - 100, current_ts - 100))
+    encoder.delete_raw_files(raw_files)
 
-    # CSV: safe age is 86400s (24h)
-    csv_old = metadata_dir / "old.csv"
-    csv_new = metadata_dir / "new.csv"
-    csv_old.write_text("col1,col2\n1,2\n", encoding="utf-8")
-    csv_new.write_text("col1,col2\n1,2\n", encoding="utf-8")
-    os.utime(csv_old, (current_ts - 90000, current_ts - 90000))  # 90000s > 86400s
-    os.utime(csv_new, (current_ts - 1000, current_ts - 1000))  # 1000s < 86400s
-
-    with patch("time.time", return_value=current_ts):
-        ready_videos = uploader.ready_files(video_dir, ["*.ts", "*.mp4"])
-        assert ready_videos == [v_old]
-
-        ready_csvs = uploader.ready_files(metadata_dir, ["*.csv"])
-        assert ready_csvs == [csv_old]
+    assert all(not path.exists() for path in raw_files)

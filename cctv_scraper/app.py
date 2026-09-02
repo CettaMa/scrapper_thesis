@@ -9,7 +9,6 @@ import cctv_scraper.doh  # noqa: F401
 from cctv_scraper.archive import ArchiveEncoder
 from cctv_scraper.config import RuntimeConfig, load_cctv_points
 from cctv_scraper.disk import DiskMonitor
-from cctv_scraper.drive import GoogleDriveUploader
 from cctv_scraper.logging_setup import setup_logging
 from cctv_scraper.metadata import MetadataCollector
 from cctv_scraper.recorder import CCTVRecorder
@@ -22,6 +21,8 @@ def validate_video_encoder(config: RuntimeConfig) -> None:
         required_encoders.add(config.video_encoder)
     if config.archive_encoder_enabled:
         required_encoders.add(config.archive_video_encoder)
+        if config.archive_video_encoder in {"h264_qsv", "hevc_qsv"}:
+            required_encoders.add(config.archive.fallback_video_encoder)
 
     if not required_encoders:
         return
@@ -43,7 +44,7 @@ def validate_video_encoder(config: RuntimeConfig) -> None:
     if missing:
         raise RuntimeError(
             f"Encoder FFmpeg tidak tersedia: {', '.join(missing)}. "
-            "Periksa NVIDIA driver/NVENC, atau ubah encoder ke libx265/libx264."
+            "Periksa encoder hardware, atau ubah encoder ke h264_qsv, hevc_qsv, libx265, atau libx264."
         )
 
 
@@ -93,14 +94,6 @@ class CCTVApp:
         logging.info("Archive video encoder: %s", self.config.archive_video_encoder)
         logging.info("Archive target bitrate: %s", self.config.archive_target_bitrate)
         logging.info("Archive maximum bitrate: %s", self.config.archive_max_bitrate)
-        logging.info("Google Drive upload enabled: %s", self.config.drive_upload_enabled)
-        logging.info("Google Drive folder ID configured: %s", bool(self.config.drive_folder_id))
-        logging.info("Google Drive scan interval: %s seconds", self.config.drive_scan_seconds)
-        logging.info("Google Drive safe age: %s seconds", self.config.drive_safe_age_seconds)
-        logging.info(
-            "Google Drive delete local after upload: %s",
-            self.config.drive_delete_local_after_upload,
-        )
         logging.info("Preflight check: %s", self.config.preflight_check)
         logging.info("Offline retry seconds: %s", self.config.offline_retry_seconds)
         logging.info("Network retry seconds: %s", self.config.network_retry_seconds)
@@ -142,10 +135,6 @@ class CCTVApp:
         archive = ArchiveEncoder(points, self.config, self.stop_event)
         self.threads.append(archive)
         archive.start()
-
-        drive = GoogleDriveUploader(points, self.config, self.stop_event)
-        self.threads.append(drive)
-        drive.start()
 
         disk = DiskMonitor(self.config, self.stop_event)
         self.threads.append(disk)
