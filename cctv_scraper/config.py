@@ -112,6 +112,7 @@ class ArchiveConfig:
     max_bitrate: str
     buffer_size: str
     output_height: int
+    output_fps: int = 0
     vaapi_device: str = "/dev/dri/renderD128"
     retry_base_seconds: int = 60
     retry_max_seconds: int = 3600
@@ -163,6 +164,22 @@ def ensure_dir(path: Path) -> None:
 
 def now_local() -> datetime:
     return datetime.now()
+
+
+def window_start_epoch(timestamp: float, interval_seconds: int) -> int:
+    """Floor an epoch timestamp to the start of its fixed-width window."""
+    return int(timestamp) // interval_seconds * interval_seconds
+
+
+def archive_window_filename(point_name: str, window_start: int, interval_seconds: int) -> str:
+    """Name of the archive file covering one window.
+
+    Shared by the encoder and the metadata writer so the filename recorded in the
+    metadata CSV cannot drift from the file the encoder actually produces.
+    """
+    start_dt = datetime.fromtimestamp(window_start)
+    end_dt = datetime.fromtimestamp(window_start + interval_seconds)
+    return f"{point_name}_{start_dt.strftime('%Y%m%d_%H%M%S')}_{end_dt.strftime('%H%M%S')}.mp4"
 
 
 def safe_float(value: object, fallback: float) -> float:
@@ -364,6 +381,7 @@ ARCHIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None
     ("max_bitrate", "ARCHIVE_MAX_BITRATE", str, "900k", None),
     ("buffer_size", "ARCHIVE_BUFFER_SIZE", str, "1300k", None),
     ("output_height", "ARCHIVE_OUTPUT_HEIGHT", int, 0, None),
+    ("output_fps", "ARCHIVE_OUTPUT_FPS", int, 0, None),
     ("vaapi_device", "ARCHIVE_VAAPI_DEVICE", str, "/dev/dri/renderD128", None),
     ("retry_base_seconds", "ARCHIVE_RETRY_BASE_SECONDS", int, 60, validate_positive_number),
     ("retry_max_seconds", "ARCHIVE_RETRY_MAX_SECONDS", int, 3600, validate_positive_number),

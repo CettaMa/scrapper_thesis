@@ -6,7 +6,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from cctv_scraper.config import CCTVPoint, RuntimeConfig, ensure_dir
+from cctv_scraper.config import (
+    CCTVPoint,
+    RuntimeConfig,
+    archive_window_filename,
+    ensure_dir,
+    window_start_epoch,
+)
 from cctv_scraper.storage_scan import iter_point_date_dirs, ready_files, trim_stderr
 
 
@@ -69,10 +75,12 @@ class ArchiveEncoder(threading.Thread):
             segment_start = self.segment_start_timestamp(point, path)
             if segment_start is None:
                 segment_start = int(path.stat().st_mtime)
-            window_start = segment_start // self.config.archive.interval_seconds
-            window_start *= self.config.archive.interval_seconds
+            window_start = window_start_epoch(segment_start, self.config.archive.interval_seconds)
             window_end = window_start + self.config.archive.interval_seconds
-            if time.time() < window_end + self.config.archive.safe_age_seconds:
+            # A segment starting just before the boundary is still being written at
+            # window_end and only becomes readable segment_seconds + safe_age later.
+            # Encoding before then would leave it stranded as a late segment.
+            if time.time() < self.window_ready_at(window_end):
                 continue
             grouped.setdefault(window_start, []).append(path)
 
@@ -87,15 +95,14 @@ class ArchiveEncoder(threading.Thread):
         if not files:
             return
 
-        start_dt = datetime.fromtimestamp(window_start)
-        end_dt = datetime.fromtimestamp(window_start + self.config.archive.interval_seconds)
-        output = encoded_dir / (
-            f"{point.name}_{start_dt.strftime('%Y%m%d_%H%M%S')}_{end_dt.strftime('%H%M%S')}.mp4"
+        output = encoded_dir / archive_window_filename(
+            point.name, window_start, self.config.archive.interval_seconds
         )
 
         failure_marker = self.failure_marker_path(output)
         if output.exists() and output.stat().st_size > 0:
             self.remove_failure_marker(failure_marker)
+            self.record_late_segments(output, files)
             return
 
         failure_state = self.read_failure_state(failure_marker)
@@ -200,6 +207,40 @@ class ArchiveEncoder(threading.Thread):
             return int(datetime.strptime(timestamp_text, "%Y%m%d_%H%M%S").timestamp())
         except ValueError:
             return None
+
+    def window_ready_at(self, window_end: int) -> int:
+        """Earliest time every segment belonging to a window can have become readable."""
+        return (
+            window_end + self.config.recorder.segment_seconds + self.config.archive.safe_age_seconds
+        )
+
+    def record_late_segments(self, output: Path, files: list[Path]) -> None:
+        """Flag an already-encoded window whose raw segments turned up too late.
+
+        The raw files are deliberately kept: they hold footage the archive does not,
+        so deleting them would lose it outright.
+        """
+        names = sorted(path.name for path in files)
+        self.logger.warning(
+            "Window already encoded but %s raw segment(s) arrived late; archive is "
+            "incomplete and raw segments are preserved: %s | %s",
+            len(names),
+            output,
+            ", ".join(names),
+        )
+
+        manifest_path = self.manifest_path(output)
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = None
+        manifest: dict[str, object] = loaded if isinstance(loaded, dict) else {}
+
+        previous = manifest.get("late_segments")
+        previous_names = previous if isinstance(previous, list) else []
+        manifest["late_segments"] = sorted({*names, *previous_names})
+        manifest["complete"] = False
+        self.write_manifest(manifest_path, manifest)
 
     @staticmethod
     def manifest_path(output: Path) -> Path:
@@ -396,6 +437,9 @@ class ArchiveEncoder(threading.Thread):
         ]
 
         filters = []
+        # Drop frames before scaling or hwupload so the encoder never sees them.
+        if self.config.archive.output_fps > 0:
+            filters.append(f"fps={self.config.archive.output_fps}")
         if self.config.archive.output_height > 0:
             filters.append(f"scale=-2:{self.config.archive.output_height}")
         if encoder in {"h264_vaapi", "hevc_vaapi"}:

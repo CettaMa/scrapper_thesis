@@ -14,6 +14,7 @@ from cctv_scraper import (
     ArchiveEncoder,
     CCTVPoint,
     CCTVRecorder,
+    MetadataCollector,
     MetadataConfig,
     NetworkConfig,
     RecorderConfig,
@@ -78,6 +79,7 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
         max_bitrate="900k",
         buffer_size="1300k",
         output_height=0,
+        output_fps=0,
         vaapi_device="/dev/dri/renderD128",
         retry_base_seconds=60,
         retry_max_seconds=3600,
@@ -129,6 +131,8 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
             archive_defaults["buffer_size"] = v
         elif k == "archive_output_height":
             archive_defaults["output_height"] = v
+        elif k == "archive_output_fps":
+            archive_defaults["output_fps"] = v
         elif k == "archive_vaapi_device":
             archive_defaults["vaapi_device"] = v
         elif k == "archive_retry_base_seconds":
@@ -650,8 +654,8 @@ def test_archive_encoder_window_grouping(tmp_path: Path, monkeypatch: pytest.Mon
     os.utime(file3, (300350, 300350))
 
     # Test 1: Simulated time is 300350
-    # Window 0 ends at 300300, safe cutoff = 300300 + 90 = 300390
-    # At 300350 < 300390, Window 0 is NOT yet ready
+    # Window 0 ends at 300300; cutoff = 300300 + segment_seconds 60 + safe_age 90 = 300450
+    # At 300350 < 300450, Window 0 is NOT yet ready
     with patch("time.time", return_value=300350):
         batches_encoded: list[tuple[int, list[str]]] = []
         monkeypatch.setattr(
@@ -663,8 +667,8 @@ def test_archive_encoder_window_grouping(tmp_path: Path, monkeypatch: pytest.Mon
         assert len(batches_encoded) == 0
 
     # Test 2: Simulated time is 300450
-    # Window 0 safe cutoff (300390) passed -> Window 0 encodes file1 and file2
-    # Window 1 ends at 300600 (safe cutoff 300690) -> not yet ready
+    # Window 0 cutoff (300450) reached -> Window 0 encodes file1 and file2
+    # Window 1 ends at 300600 (cutoff 300750) -> not yet ready
     with patch("time.time", return_value=300450):
         batches_encoded = []
         monkeypatch.setattr(
@@ -678,9 +682,9 @@ def test_archive_encoder_window_grouping(tmp_path: Path, monkeypatch: pytest.Mon
         assert ws == 300000
         assert set(files) == {"point_a_01.ts", "point_a_02.ts"}
 
-    # Test 3: Simulated time is 300700
-    # Both Window 0 and Window 1 safe cutoffs have passed
-    with patch("time.time", return_value=300700):
+    # Test 3: Simulated time is 300800
+    # Both Window 0 (300450) and Window 1 (300750) cutoffs have passed
+    with patch("time.time", return_value=300800):
         batches_encoded = []
         monkeypatch.setattr(
             encoder,
@@ -884,3 +888,82 @@ def test_archive_hardware_probe_switches_to_fallback(tmp_path: Path) -> None:
     probe_command = run.call_args_list[1].args[0]
     assert probe_command[probe_command.index("-vaapi_device") + 1] == "/dev/dri/renderD128"
     assert probe_command[probe_command.index("-t") + 1] == "1"
+
+
+def test_archive_fps_filter_precedes_scale_and_hwupload(tmp_path: Path) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(
+        tmp_path,
+        archive_video_encoder="h264_vaapi",
+        archive_output_fps=10,
+        archive_output_height=480,
+    )
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+
+    command = encoder.build_encode_command(tmp_path / "concat.txt", tmp_path / "window.mp4")
+    filters = command[command.index("-vf") + 1]
+
+    # Dropping frames first keeps scaling and the hardware upload off discarded frames.
+    assert filters == "fps=10,scale=-2:480,format=nv12,hwupload"
+
+
+def test_metadata_row_names_the_archive_window_it_belongs_to(tmp_path: Path) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(tmp_path, archive_interval_seconds=300)
+    collector = MetadataCollector([point], cfg, threading.Event())
+
+    # A sample taken mid-window must name that window, not the nearest boundary.
+    row = collector.build_metadata_row(point, datetime(2026, 9, 2, 17, 54, 31), {}, {}, 300)
+
+    assert row["archive_window_start"] == "2026-09-02 17:50:00"
+    assert row["archive_video"] == "point_a_20260902_175000_175500.mp4"
+
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    window_start = int(datetime(2026, 9, 2, 17, 50, 0).timestamp())
+    encoded_dir = tmp_path / "videos_encoded"
+    encoded_dir.mkdir(parents=True, exist_ok=True)
+    raw = tmp_path / "point_a_20260902_175431.ts"
+    raw.write_bytes(b"x")
+
+    # The encoder must land on exactly the filename the metadata row promised.
+    captured: list[str] = []
+
+    def fake_run(command: list[str]) -> subprocess.CompletedProcess[str]:
+        captured.append(command[-1])
+        return subprocess.CompletedProcess(command, 1, "", "boom")
+
+    encoder.run_ffmpeg = fake_run  # type: ignore[method-assign]
+    encoder.encode_batch(point, encoded_dir, window_start, [raw])
+
+    assert Path(captured[0]).name.endswith(".mp4")
+    assert row["archive_video"] in Path(captured[0]).name
+
+
+def test_late_segments_mark_window_incomplete_and_are_preserved(tmp_path: Path) -> None:
+    from cctv_scraper.config import archive_window_filename
+
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(tmp_path, archive_interval_seconds=300)
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+
+    encoded_dir = tmp_path / "videos_encoded"
+    encoded_dir.mkdir(parents=True, exist_ok=True)
+    window_start = 300000
+    output = encoded_dir / archive_window_filename(point.name, window_start, 300)
+    output.write_bytes(b"already encoded")
+
+    late = tmp_path / "point_a_20260902_175431.ts"
+    late.write_bytes(b"footage the archive does not have")
+
+    def fail_if_called(command: list[str]) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("an already-encoded window must not be re-encoded")
+
+    encoder.run_ffmpeg = fail_if_called  # type: ignore[method-assign]
+    encoder.encode_batch(point, encoded_dir, window_start, [late])
+
+    # The raw segment holds footage the MP4 lacks, so it must survive.
+    assert late.exists()
+
+    manifest = json.loads((encoded_dir / f".{output.name}.manifest.json").read_text("utf-8"))
+    assert manifest["complete"] is False
+    assert manifest["late_segments"] == [late.name]

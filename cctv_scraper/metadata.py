@@ -10,8 +10,10 @@ from cctv_scraper.config import (
     API_TIMEOUT_SECONDS,
     CCTVPoint,
     RuntimeConfig,
+    archive_window_filename,
     ensure_dir,
     now_local,
+    window_start_epoch,
 )
 
 
@@ -66,7 +68,6 @@ class MetadataCollector(threading.Thread):
             while not self.stop_event.is_set():
                 self.requests_this_pass = 0
                 self.request_failures_this_pass = 0
-                start = time.time()
                 timestamp = now_local()
                 weather_by_point = self.get_openmeteo_cached_batch(session)
 
@@ -74,7 +75,13 @@ class MetadataCollector(threading.Thread):
                     try:
                         tomtom = self.get_tomtom_cached(session, point)
                         weather = weather_by_point[point.name]
-                        metadata = self.build_metadata_row(point, timestamp, tomtom, weather)
+                        metadata = self.build_metadata_row(
+                            point,
+                            timestamp,
+                            tomtom,
+                            weather,
+                            self.config.archive.interval_seconds,
+                        )
                         self.write_metadata(point, metadata)
                     except Exception as exc:
                         self.logger.exception("Metadata failed for %s: %s", point.name, exc)
@@ -85,7 +92,6 @@ class MetadataCollector(threading.Thread):
                     else:
                         self.consecutive_failed_passes = 0
 
-                elapsed = time.time() - start
                 failure_backoff = 0
                 if self.consecutive_failed_passes:
                     failure_backoff = min(
@@ -93,9 +99,14 @@ class MetadataCollector(threading.Thread):
                         self.config.metadata.failure_backoff_base_seconds
                         * (2 ** (self.consecutive_failed_passes - 1)),
                     )
+                # Align to wall-clock window boundaries; otherwise rows drift off the
+                # archive windows they are supposed to describe.
+                now = time.time()
+                interval = self.config.metadata.metadata_interval_seconds
+                next_boundary = window_start_epoch(now, interval) + interval
                 sleep_time = max(
                     self.config.metadata.min_pass_interval_seconds,
-                    self.config.metadata.metadata_interval_seconds - elapsed,
+                    next_boundary - now,
                     failure_backoff,
                 )
                 self.stop_event.wait(sleep_time)
@@ -117,11 +128,17 @@ class MetadataCollector(threading.Thread):
     ) -> dict:
         tomtom = self.get_tomtom_cached(session, point)
         weather = self.get_openmeteo_cached(session, point)
-        return self.build_metadata_row(point, timestamp, tomtom, weather)
+        return self.build_metadata_row(
+            point, timestamp, tomtom, weather, self.config.archive.interval_seconds
+        )
 
     @staticmethod
     def build_metadata_row(
-        point: CCTVPoint, timestamp: datetime, tomtom: dict, weather: dict
+        point: CCTVPoint,
+        timestamp: datetime,
+        tomtom: dict,
+        weather: dict,
+        archive_interval_seconds: int,
     ) -> dict:
         row = {
             "cctv_name": point.name,
@@ -136,6 +153,16 @@ class MetadataCollector(threading.Thread):
         }
         row.update(tomtom)
         row.update(weather)
+
+        window_start = window_start_epoch(timestamp.timestamp(), archive_interval_seconds)
+        # Explicit join key: every row names the archive window it falls in, and the
+        # exact file the encoder will produce for that window.
+        row["archive_window_start"] = datetime.fromtimestamp(window_start).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        row["archive_video"] = archive_window_filename(
+            point.name, window_start, archive_interval_seconds
+        )
         return row
 
     def get_tomtom_cached(self, session: requests.Session, point: CCTVPoint) -> dict:
