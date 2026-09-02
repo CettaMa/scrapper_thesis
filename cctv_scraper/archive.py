@@ -66,7 +66,10 @@ class ArchiveEncoder(threading.Thread):
 
         grouped: dict[int, list[Path]] = {}
         for path in files:
-            window_start = int(path.stat().st_mtime) // self.config.archive_interval_seconds
+            segment_start = self.segment_start_timestamp(point, path)
+            if segment_start is None:
+                segment_start = int(path.stat().st_mtime)
+            window_start = segment_start // self.config.archive_interval_seconds
             window_start *= self.config.archive_interval_seconds
             window_end = window_start + self.config.archive_interval_seconds
             if time.time() < window_end + self.config.archive_safe_age_seconds:
@@ -119,6 +122,7 @@ class ArchiveEncoder(threading.Thread):
                 output,
             )
 
+            used_encoder = self.config.archive.video_encoder
             try:
                 result = self.run_ffmpeg(command)
             except OSError as exc:
@@ -140,6 +144,7 @@ class ArchiveEncoder(threading.Thread):
                 except OSError:
                     pass
                 command = self.build_encode_command(list_path, tmp_output, encoder=fallback)
+                used_encoder = fallback
                 try:
                     result = self.run_ffmpeg(command)
                 except OSError as exc:
@@ -160,6 +165,13 @@ class ArchiveEncoder(threading.Thread):
                 self.record_failure(output, failure_marker, "FFmpeg produced empty output")
                 return
 
+            manifest = self.build_manifest(point, window_start, files, used_encoder)
+            if not self.write_manifest(self.manifest_path(output), manifest):
+                self.logger.error(
+                    "Archive manifest could not be written; preserving raw files: %s", output
+                )
+                return
+
             tmp_output.replace(output)
             self.remove_failure_marker(failure_marker)
             self.logger.info("Archive saved: %s | bytes=%s", output, output.stat().st_size)
@@ -177,6 +189,93 @@ class ArchiveEncoder(threading.Thread):
                     tmp_output.unlink()
                 except OSError:
                     pass
+
+    @staticmethod
+    def segment_start_timestamp(point: CCTVPoint, path: Path) -> int | None:
+        prefix = f"{point.name}_"
+        if not path.stem.startswith(prefix):
+            return None
+        timestamp_text = path.stem[len(prefix) :]
+        try:
+            return int(datetime.strptime(timestamp_text, "%Y%m%d_%H%M%S").timestamp())
+        except ValueError:
+            return None
+
+    @staticmethod
+    def manifest_path(output: Path) -> Path:
+        # Keep provenance files hidden so generic directory scans cannot treat them as media.
+        return output.parent / f".{output.name}.manifest.json"
+
+    def build_manifest(
+        self, point: CCTVPoint, window_start: int, files: list[Path], encoder: str
+    ) -> dict[str, object]:
+        window_end = window_start + self.config.archive_interval_seconds
+        segment_starts: list[int] = []
+        for path in files:
+            segment_start = self.segment_start_timestamp(point, path)
+            segment_starts.append(
+                segment_start if segment_start is not None else int(path.stat().st_mtime)
+            )
+        first_start = min(segment_starts)
+        last_start = max(segment_starts)
+        intervals = sorted(
+            (
+                max(window_start, start),
+                min(window_end, start + self.config.segment_seconds),
+            )
+            for start in segment_starts
+        )
+        actual_duration = 0
+        covered_start: int | None = None
+        covered_end: int | None = None
+        for start, end in intervals:
+            if end <= start:
+                continue
+            if covered_start is None:
+                covered_start, covered_end = start, end
+            elif covered_end is not None and start > covered_end:
+                actual_duration += covered_end - covered_start
+                covered_start, covered_end = start, end
+            else:
+                assert covered_end is not None
+                covered_end = max(covered_end, end)
+        if covered_start is not None and covered_end is not None:
+            actual_duration += covered_end - covered_start
+
+        window_start_dt = datetime.fromtimestamp(window_start)
+        window_end_dt = datetime.fromtimestamp(window_end)
+        return {
+            "point_name": point.name,
+            "window_start": window_start,
+            "window_end": window_end,
+            "window_start_iso": window_start_dt.isoformat(),
+            "window_end_iso": window_end_dt.isoformat(),
+            "segment_count": len(files),
+            "first_segment_start": first_start,
+            "last_segment_start": last_start,
+            "first_segment_start_iso": datetime.fromtimestamp(first_start).isoformat(),
+            "last_segment_start_iso": datetime.fromtimestamp(last_start).isoformat(),
+            "expected_covered_duration_seconds": self.config.archive_interval_seconds,
+            "actual_covered_duration_seconds": actual_duration,
+            "encoder": encoder,
+            "encoder_used": encoder,
+        }
+
+    def write_manifest(self, manifest_path: Path, manifest: dict[str, object]) -> bool:
+        temporary_path = manifest_path.with_name(f"{manifest_path.name}.tmp")
+        try:
+            temporary_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            temporary_path.replace(manifest_path)
+            return True
+        except OSError as exc:
+            self.logger.error("Cannot write archive manifest %s: %s", manifest_path, exc)
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
 
     @staticmethod
     def failure_marker_path(output: Path) -> Path:

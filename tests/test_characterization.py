@@ -1,6 +1,8 @@
+import json
 import os
 import subprocess
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -583,6 +585,41 @@ def test_build_ffmpeg_command_mp4_container(tmp_path: Path) -> None:
 # ============================================================================
 # 3. ArchiveEncoder window grouping test
 # ============================================================================
+def test_archive_groups_by_segment_start_not_finish_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(tmp_path, archive_interval_seconds=300, archive_safe_age_seconds=90)
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    date_dir = tmp_path / "2026-06-21"
+    raw_dir = date_dir / point.name / "videos"
+    raw_dir.mkdir(parents=True)
+
+    first_start = 300290
+    second_start = 300350
+    first = raw_dir / f"{point.name}_{datetime.fromtimestamp(first_start):%Y%m%d_%H%M%S}.ts"
+    second = raw_dir / f"{point.name}_{datetime.fromtimestamp(second_start):%Y%m%d_%H%M%S}.ts"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    # The first segment finished after the 300000 boundary, but started before it.
+    os.utime(first, (300350, 300350))
+    os.utime(second, (300400, 300400))
+
+    batches: list[tuple[int, list[str]]] = []
+    monkeypatch.setattr(
+        encoder,
+        "encode_batch",
+        lambda pt, enc_dir, ws, fls: batches.append((ws, [file.name for file in fls])),
+    )
+    with patch("time.time", return_value=301000):
+        encoder.encode_point_date(point, date_dir)
+
+    assert batches == [
+        (300000, [first.name]),
+        (300300, [second.name]),
+    ]
+
+
 def test_archive_encoder_window_grouping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
     cfg = make_dummy_config(
@@ -734,7 +771,7 @@ def test_archive_retries_hardware_failure_with_fallback_and_commits(
     encoder = ArchiveEncoder([point], cfg, threading.Event())
     encoded_dir = tmp_path / "videos_encoded"
     encoded_dir.mkdir()
-    raw_file = tmp_path / "segment.ts"
+    raw_file = tmp_path / f"point_a_{datetime.fromtimestamp(300000):%Y%m%d_%H%M%S}.ts"
     raw_file.write_bytes(b"raw")
     commands: list[list[str]] = []
 
@@ -754,6 +791,16 @@ def test_archive_retries_hardware_failure_with_fallback_and_commits(
     archives = list(encoded_dir.glob("*.mp4"))
     assert len(archives) == 1
     assert archives[0].read_bytes() == b"mp4"
+    manifest = json.loads(encoder.manifest_path(archives[0]).read_text(encoding="utf-8"))
+    assert manifest["point_name"] == "point_a"
+    assert manifest["window_start"] == 300000
+    assert manifest["window_end"] == 300300
+    assert manifest["segment_count"] == 1
+    assert manifest["first_segment_start"] == 300000
+    assert manifest["last_segment_start"] == 300000
+    assert manifest["encoder"] == "libx264"
+    assert manifest["expected_covered_duration_seconds"] == 300
+    assert manifest["actual_covered_duration_seconds"] == 60
 
 
 def test_archive_failure_backoff_marks_window_failed_and_preserves_raw(

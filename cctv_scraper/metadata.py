@@ -20,7 +20,7 @@ class MetadataCollector(threading.Thread):
     Mengambil metadata eksternal per titik.
 
     - TomTom dipanggil default setiap 300 detik / 5 menit.
-    - Open-Meteo dipanggil default setiap 60 detik.
+    - Open-Meteo dipanggil default setiap 60 detik dalam satu request batch untuk semua titik.
     - CSV metadata tetap ditulis setiap METADATA_INTERVAL_SECONDS.
     - Jika belum waktunya call ulang, nilai terakhir dipakai kembali dan diberi status cached.
     - Memegang satu requests.Session selama masa hidup thread untuk connection pooling & HTTP keep-alive.
