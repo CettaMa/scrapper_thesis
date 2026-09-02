@@ -1,3 +1,4 @@
+import json
 import logging
 import subprocess
 import threading
@@ -89,7 +90,19 @@ class ArchiveEncoder(threading.Thread):
             f"{point.name}_{start_dt.strftime('%Y%m%d_%H%M%S')}_{end_dt.strftime('%H%M%S')}.mp4"
         )
 
+        failure_marker = self.failure_marker_path(output)
         if output.exists() and output.stat().st_size > 0:
+            self.remove_failure_marker(failure_marker)
+            return
+
+        failure_state = self.read_failure_state(failure_marker)
+        if failure_state.get("status") == "failed":
+            return
+        raw_next_retry_at = failure_state.get("next_retry_at", 0.0)
+        next_retry_at = (
+            float(raw_next_retry_at) if isinstance(raw_next_retry_at, (int, float)) else 0.0
+        )
+        if time.time() < next_retry_at:
             return
 
         list_path = encoded_dir / f".{output.stem}.concat.txt"
@@ -106,14 +119,18 @@ class ArchiveEncoder(threading.Thread):
                 output,
             )
 
-            result = self.run_ffmpeg(command)
+            try:
+                result = self.run_ffmpeg(command)
+            except OSError as exc:
+                self.record_failure(output, failure_marker, f"FFmpeg could not run: {exc}")
+                return
 
             if result.returncode != 0 and self.is_hardware_encoder(
                 self.config.archive.video_encoder
             ):
                 fallback = self.config.archive.fallback_video_encoder
                 self.logger.warning(
-                    "QuickSync archive encode failed for %s; retrying with %s | stderr=%s",
+                    "Hardware archive encode failed for %s; retrying with %s | stderr=%s",
                     output,
                     fallback,
                     trim_stderr(result.stderr),
@@ -123,22 +140,28 @@ class ArchiveEncoder(threading.Thread):
                 except OSError:
                     pass
                 command = self.build_encode_command(list_path, tmp_output, encoder=fallback)
-                result = self.run_ffmpeg(command)
+                try:
+                    result = self.run_ffmpeg(command)
+                except OSError as exc:
+                    self.record_failure(
+                        output, failure_marker, f"Fallback FFmpeg could not run: {exc}"
+                    )
+                    return
 
             if result.returncode != 0:
-                self.logger.warning(
-                    "Archive encode failed for %s | code=%s | stderr=%s",
+                self.record_failure(
                     output,
-                    result.returncode,
-                    trim_stderr(result.stderr),
+                    failure_marker,
+                    f"code={result.returncode} | stderr={trim_stderr(result.stderr)}",
                 )
                 return
 
             if not tmp_output.exists() or tmp_output.stat().st_size <= 0:
-                self.logger.warning("Archive encode produced empty output: %s", tmp_output)
+                self.record_failure(output, failure_marker, "FFmpeg produced empty output")
                 return
 
             tmp_output.replace(output)
+            self.remove_failure_marker(failure_marker)
             self.logger.info("Archive saved: %s | bytes=%s", output, output.stat().st_size)
 
             if self.config.archive_delete_raw_after_success:
@@ -154,6 +177,75 @@ class ArchiveEncoder(threading.Thread):
                     tmp_output.unlink()
                 except OSError:
                     pass
+
+    @staticmethod
+    def failure_marker_path(output: Path) -> Path:
+        """Return the persistent state file for an unsuccessfully encoded window."""
+        return output.parent / f".{output.name}.failure.json"
+
+    def read_failure_state(self, marker: Path) -> dict[str, object]:
+        if not marker.exists():
+            return {}
+        try:
+            state = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self.logger.warning("Cannot read archive failure marker %s: %s", marker, exc)
+            return {}
+        return state if isinstance(state, dict) else {}
+
+    def remove_failure_marker(self, marker: Path) -> None:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError as exc:
+            self.logger.warning("Cannot remove archive failure marker %s: %s", marker, exc)
+
+    def record_failure(self, output: Path, marker: Path, reason: str) -> None:
+        state = self.read_failure_state(marker)
+        previous_attempts = state.get("attempts", 0)
+        attempts = int(previous_attempts) if isinstance(previous_attempts, (int, float)) else 0
+        attempts += 1
+        max_attempts = self.config.archive_max_attempts
+        terminal = attempts >= max_attempts
+        failure_time = time.time()
+        state = {
+            "status": "failed" if terminal else "retrying",
+            "attempts": attempts,
+            "last_failure": reason,
+            "failed_at": failure_time,
+        }
+
+        if terminal:
+            self.logger.warning(
+                "Archive window marked failed; skipping %s after %s attempts | reason=%s",
+                output,
+                attempts,
+                reason,
+            )
+        else:
+            delay = min(
+                self.config.archive_retry_max_seconds,
+                self.config.archive_retry_base_seconds * (2 ** (attempts - 1)),
+            )
+            state["next_retry_at"] = failure_time + delay
+            self.logger.warning(
+                "Archive encode failed for %s; retrying in %s seconds (attempt %s/%s) | reason=%s",
+                output,
+                delay,
+                attempts,
+                max_attempts,
+                reason,
+            )
+
+        temporary_marker = marker.with_name(f"{marker.name}.tmp")
+        try:
+            temporary_marker.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+            temporary_marker.replace(marker)
+        except OSError as exc:
+            self.logger.error("Cannot persist archive failure marker %s: %s", marker, exc)
+            try:
+                temporary_marker.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def write_concat_file(self, list_path: Path, files: list[Path]) -> None:
         with list_path.open("w", encoding="utf-8", newline="\n") as f:
@@ -179,12 +271,18 @@ class ArchiveEncoder(threading.Thread):
     def build_encode_command(
         self, list_path: Path, output: Path, encoder: str | None = None
     ) -> list[str]:
+        encoder = encoder or self.config.archive_video_encoder
         cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel",
             self.config.ffmpeg_loglevel,
             "-y",
+        ]
+        if encoder in {"h264_vaapi", "hevc_vaapi"}:
+            cmd += ["-vaapi_device", self.config.archive_vaapi_device]
+
+        cmd += [
             "-f",
             "concat",
             "-safe",
@@ -198,7 +296,6 @@ class ArchiveEncoder(threading.Thread):
             "-an",
         ]
 
-        encoder = encoder or self.config.archive_video_encoder
         filters = []
         if self.config.archive_output_height > 0:
             filters.append(f"scale=-2:{self.config.archive_output_height}")
@@ -263,7 +360,8 @@ class ArchiveEncoder(threading.Thread):
         else:
             raise ValueError(
                 f"ARCHIVE_VIDEO_ENCODER tidak didukung: {encoder}. "
-                "Gunakan h264_qsv, hevc_qsv, hevc_nvenc, h264_nvenc, libx265, atau libx264."
+                "Gunakan h264_qsv, hevc_qsv, h264_vaapi, hevc_vaapi, hevc_nvenc, "
+                "h264_nvenc, libx265, atau libx264."
             )
 
         cmd += ["-movflags", "+faststart", str(output)]

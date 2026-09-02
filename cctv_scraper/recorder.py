@@ -20,11 +20,18 @@ class CCTVRecorder(threading.Thread):
         self.config = config
         self.stop_event = stop_event
         self.process: subprocess.Popen | None = None
-        self.logger = point_logger(config.output_root, point.name)
+        self.logger = point_logger(
+            config.output_root,
+            point.name,
+            config.log_max_bytes,
+            config.log_backup_count,
+        )
         self.last_restart_at: datetime | None = None
         self.process_start_date: date | None = None
         self.ffmpeg_stderr_file: IO[str] | None = None
         self._ffmpeg_self_exited = False
+        self.consecutive_expiry_failures = 0
+        self.expiry_url_escalated = False
 
     def run(self) -> None:
         self.logger.info("Recorder watchdog started.")
@@ -32,16 +39,12 @@ class CCTVRecorder(threading.Thread):
         while not self.stop_event.is_set():
             ok, reason, http_status = self.preflight_stream()
             if not ok:
-                self.write_status("offline", reason=reason, http_status=http_status)
-                self.logger.warning(
-                    "Preflight failed for %s | reason=%s | http_status=%s",
-                    self.point.name,
-                    reason,
-                    http_status or "-",
-                )
+                self.handle_preflight_failure(reason, http_status)
                 self.sleep_after_preflight_failure(reason)
                 continue
 
+            self.consecutive_expiry_failures = 0
+            self.expiry_url_escalated = False
             self.write_status("online_preflight_ok", reason=reason, http_status=http_status)
             self._ffmpeg_self_exited = False
             self.start_ffmpeg()
@@ -334,6 +337,41 @@ class CCTVRecorder(threading.Thread):
 
         except requests.RequestException as exc:
             return False, f"preflight_error: {exc}", ""
+
+    def handle_preflight_failure(self, reason: str, http_status: str) -> None:
+        is_expiry = "not_found" in reason or "expired" in reason
+        if is_expiry:
+            self.consecutive_expiry_failures += 1
+        else:
+            self.consecutive_expiry_failures = 0
+            self.expiry_url_escalated = False
+
+        self.write_status("offline", reason=reason, http_status=http_status)
+        self.logger.warning(
+            "Preflight failed for %s | reason=%s | http_status=%s",
+            self.point.name,
+            reason,
+            http_status or "-",
+        )
+
+        threshold = self.config.expired_url_escalation_threshold
+        if is_expiry and self.consecutive_expiry_failures >= threshold:
+            marker = "EXPIRED_URL_ESCALATION"
+            if not self.expiry_url_escalated:
+                self.logger.error(
+                    "[%s] %s consecutive expired URL preflight failures for %s; "
+                    "the stream URL likely needs rotation.",
+                    marker,
+                    self.consecutive_expiry_failures,
+                    self.point.name,
+                )
+                self.write_status(
+                    "expired_url_escalated",
+                    reason=f"{marker}: {reason}; consecutive_failures="
+                    f"{self.consecutive_expiry_failures}",
+                    http_status=http_status,
+                )
+                self.expiry_url_escalated = True
 
     def sleep_after_preflight_failure(self, reason: str) -> None:
         if "not_found" in reason or "forbidden" in reason or "unauthorized" in reason:

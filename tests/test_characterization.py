@@ -1,4 +1,5 @@
 import os
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from cctv_scraper import (
     StorageConfig,
     load_cctv_points,
     parse_coordinate,
+    validate_video_encoder,
 )
 
 
@@ -54,6 +56,9 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
         metadata_interval_seconds=60,
         tomtom_interval_seconds=300,
         openmeteo_interval_seconds=60,
+        min_pass_interval_seconds=5,
+        failure_backoff_base_seconds=5,
+        failure_backoff_max_seconds=300,
         default_lat=-6.851117,
         default_lon=107.496586,
         tomtom_api_key=None,
@@ -71,17 +76,24 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
         max_bitrate="900k",
         buffer_size="1300k",
         output_height=0,
+        vaapi_device="/dev/dri/renderD128",
+        retry_base_seconds=60,
+        retry_max_seconds=3600,
+        max_attempts=3,
     )
     storage_defaults: dict[str, Any] = dict(
         output_root=output_root,
         retention_days=7,
         min_free_space_gb=20.0,
         disk_check_seconds=300,
+        log_max_bytes=10 * 1024 * 1024,
+        log_backup_count=5,
     )
     network_defaults: dict[str, Any] = dict(
         preflight_check=True,
         offline_retry_seconds=300,
         network_retry_seconds=60,
+        expired_url_escalation_threshold=3,
     )
 
     config_file = kwargs.pop("config_file", output_root / "cctv_points.csv")
@@ -115,6 +127,26 @@ def make_dummy_config(output_root: Path, **kwargs: Any) -> RuntimeConfig:
             archive_defaults["buffer_size"] = v
         elif k == "archive_output_height":
             archive_defaults["output_height"] = v
+        elif k == "archive_vaapi_device":
+            archive_defaults["vaapi_device"] = v
+        elif k == "archive_retry_base_seconds":
+            archive_defaults["retry_base_seconds"] = v
+        elif k == "archive_retry_max_seconds":
+            archive_defaults["retry_max_seconds"] = v
+        elif k == "archive_max_attempts":
+            archive_defaults["max_attempts"] = v
+        elif k == "metadata_min_pass_interval_seconds":
+            metadata_defaults["min_pass_interval_seconds"] = v
+        elif k == "metadata_failure_backoff_base_seconds":
+            metadata_defaults["failure_backoff_base_seconds"] = v
+        elif k == "metadata_failure_backoff_max_seconds":
+            metadata_defaults["failure_backoff_max_seconds"] = v
+        elif k == "log_max_bytes":
+            storage_defaults["log_max_bytes"] = v
+        elif k == "log_backup_count":
+            storage_defaults["log_backup_count"] = v
+        elif k == "expired_url_escalation_threshold":
+            network_defaults["expired_url_escalation_threshold"] = v
         elif k in storage_defaults:
             storage_defaults[k] = v
         elif k in network_defaults:
@@ -643,6 +675,143 @@ def test_archive_uses_qsv_and_represents_sparse_window(tmp_path: Path) -> None:
     assert "make_zero" in command
 
 
+def test_archive_builds_exact_vaapi_command_with_device_before_input(tmp_path: Path) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(
+        tmp_path,
+        archive_video_encoder="h264_vaapi",
+        archive_vaapi_device="/dev/dri/renderD129",
+    )
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    list_path = tmp_path / "concat.txt"
+    output = tmp_path / "window.mp4"
+
+    assert encoder.build_encode_command(list_path, output) == [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-y",
+        "-vaapi_device",
+        "/dev/dri/renderD129",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-fflags",
+        "+genpts",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-an",
+        "-vf",
+        "format=nv12,hwupload",
+        "-c:v",
+        "h264_vaapi",
+        "-b:v",
+        "650k",
+        "-maxrate:v",
+        "900k",
+        "-bufsize:v",
+        "1300k",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+
+
+@pytest.mark.parametrize("hardware_encoder", ["h264_qsv", "hevc_qsv", "h264_vaapi", "hevc_vaapi"])
+def test_archive_retries_hardware_failure_with_fallback_and_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hardware_encoder: str
+) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(
+        tmp_path,
+        archive_video_encoder=hardware_encoder,
+        archive_delete_raw_after_success=False,
+    )
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    encoded_dir = tmp_path / "videos_encoded"
+    encoded_dir.mkdir()
+    raw_file = tmp_path / "segment.ts"
+    raw_file.write_bytes(b"raw")
+    commands: list[list[str]] = []
+
+    def run_ffmpeg(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if len(commands) == 1:
+            return subprocess.CompletedProcess(command, 1, "", "no device")
+        Path(command[-1]).write_bytes(b"mp4")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(encoder, "run_ffmpeg", run_ffmpeg)
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+
+    assert len(commands) == 2
+    assert commands[0][commands[0].index("-c:v") + 1] == hardware_encoder
+    assert commands[1][commands[1].index("-c:v") + 1] == "libx264"
+    archives = list(encoded_dir.glob("*.mp4"))
+    assert len(archives) == 1
+    assert archives[0].read_bytes() == b"mp4"
+
+
+def test_archive_failure_backoff_marks_window_failed_and_preserves_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(
+        tmp_path,
+        archive_video_encoder="libx264",
+        archive_retry_base_seconds=10,
+        archive_retry_max_seconds=100,
+        archive_max_attempts=3,
+    )
+    encoder = ArchiveEncoder([point], cfg, threading.Event())
+    encoded_dir = tmp_path / "videos_encoded"
+    encoded_dir.mkdir()
+    raw_file = tmp_path / "segment.ts"
+    raw_file.write_bytes(b"raw")
+    calls = 0
+    clock = [100.0]
+
+    def run_ffmpeg(command: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(command, 1, "", "broken input")
+
+    monkeypatch.setattr(encoder, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr("cctv_scraper.archive.time.time", lambda: clock[0])
+
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+    marker = next(encoded_dir.glob("*.failure.json"))
+    assert calls == 1
+    assert marker.exists()
+    assert '"attempts": 1' in marker.read_text(encoding="utf-8")
+
+    clock[0] = 109
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+    assert calls == 1
+    clock[0] = 110
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+    assert calls == 2
+    clock[0] = 129
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+    assert calls == 2
+    clock[0] = 130
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+    assert calls == 3
+    encoder.encode_batch(point, encoded_dir, 300000, [raw_file])
+    assert calls == 3
+    restarted = ArchiveEncoder([point], cfg, threading.Event())
+    monkeypatch.setattr(restarted, "run_ffmpeg", run_ffmpeg)
+    restarted.encode_batch(point, encoded_dir, 300000, [raw_file])
+    assert calls == 3
+    assert '"attempts": 3' in marker.read_text(encoding="utf-8")
+    assert '"status": "failed"' in marker.read_text(encoding="utf-8")
+    assert raw_file.exists()
+
+
 def test_archive_deletes_raw_files_after_success(tmp_path: Path) -> None:
     point = CCTVPoint(name="point_a", url="https://stream.test/a.m3u8", lat=-6.85, lon=107.5)
     cfg = make_dummy_config(tmp_path, archive_delete_raw_after_success=True)
@@ -654,3 +823,17 @@ def test_archive_deletes_raw_files_after_success(tmp_path: Path) -> None:
     encoder.delete_raw_files(raw_files)
 
     assert all(not path.exists() for path in raw_files)
+
+
+def test_archive_hardware_probe_switches_to_fallback(tmp_path: Path) -> None:
+    cfg = make_dummy_config(tmp_path, archive_video_encoder="h264_vaapi")
+    encoders = subprocess.CompletedProcess(["ffmpeg"], 0, "h264_vaapi libx264", "")
+    probe = subprocess.CompletedProcess(["ffmpeg"], 1, "", "No VA display")
+
+    with patch("cctv_scraper.app.subprocess.run", side_effect=[encoders, probe]) as run:
+        validated = validate_video_encoder(cfg)
+
+    assert validated.archive_video_encoder == "libx264"
+    probe_command = run.call_args_list[1].args[0]
+    assert probe_command[probe_command.index("-vaapi_device") + 1] == "/dev/dri/renderD128"
+    assert probe_command[probe_command.index("-t") + 1] == "1"

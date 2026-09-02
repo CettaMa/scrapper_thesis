@@ -66,8 +66,18 @@ def test_load_runtime_config_env_overrides(tmp_path: Path):
         "OUTPUT_FPS": "25",
         "ARCHIVE_ENCODER_ENABLED": "false",
         "ARCHIVE_INTERVAL_SECONDS": "600",
+        "ARCHIVE_VAAPI_DEVICE": "/dev/dri/renderD129",
+        "ARCHIVE_RETRY_BASE_SECONDS": "15",
+        "ARCHIVE_RETRY_MAX_SECONDS": "120",
+        "ARCHIVE_MAX_ATTEMPTS": "4",
         "RETENTION_DAYS": "14",
         "MIN_FREE_SPACE_GB": "50.5",
+        "METADATA_MIN_PASS_INTERVAL_SECONDS": "7",
+        "METADATA_FAILURE_BACKOFF_BASE_SECONDS": "8",
+        "METADATA_FAILURE_BACKOFF_MAX_SECONDS": "90",
+        "LOG_MAX_BYTES": "12345",
+        "LOG_BACKUP_COUNT": "2",
+        "EXPIRED_URL_ESCALATION_THRESHOLD": "4",
         "DEFAULT_LAT": "-6.123",
         "DEFAULT_LON": "107.456",
     }
@@ -81,8 +91,18 @@ def test_load_runtime_config_env_overrides(tmp_path: Path):
     assert cfg.recorder.output_fps == 25
     assert cfg.archive.enabled is False
     assert cfg.archive.interval_seconds == 600
+    assert cfg.archive.vaapi_device == "/dev/dri/renderD129"
+    assert cfg.archive.retry_base_seconds == 15
+    assert cfg.archive.retry_max_seconds == 120
+    assert cfg.archive.max_attempts == 4
     assert cfg.storage.retention_days == 14
     assert cfg.storage.min_free_space_gb == pytest.approx(50.5)
+    assert cfg.metadata.min_pass_interval_seconds == 7
+    assert cfg.metadata.failure_backoff_base_seconds == 8
+    assert cfg.metadata.failure_backoff_max_seconds == 90
+    assert cfg.storage.log_max_bytes == 12345
+    assert cfg.storage.log_backup_count == 2
+    assert cfg.network.expired_url_escalation_threshold == 4
     assert cfg.metadata.default_lat == pytest.approx(-6.123)
     assert cfg.metadata.default_lon == pytest.approx(107.456)
 

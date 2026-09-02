@@ -39,6 +39,15 @@ class MetadataCollector(threading.Thread):
         self.openmeteo_cache: dict[str, dict] = {}
         self.openmeteo_last_fetch: dict[str, float] = {}
 
+        self.requests_this_pass = 0
+        self.request_failures_this_pass = 0
+        self.consecutive_failed_passes = 0
+
+    def _record_request(self, failed: bool) -> None:
+        self.requests_this_pass += 1
+        if failed:
+            self.request_failures_this_pass += 1
+
     def run(self) -> None:
         self.logger.info("Metadata collector started.")
         self.logger.info(
@@ -52,18 +61,40 @@ class MetadataCollector(threading.Thread):
         session = requests.Session()
         try:
             while not self.stop_event.is_set():
+                self.requests_this_pass = 0
+                self.request_failures_this_pass = 0
                 start = time.time()
                 timestamp = now_local()
+                weather_by_point = self.get_openmeteo_cached_batch(session)
 
                 for point in self.points:
                     try:
-                        metadata = self.collect_point_metadata(session, point, timestamp)
+                        tomtom = self.get_tomtom_cached(session, point)
+                        weather = weather_by_point[point.name]
+                        metadata = self.build_metadata_row(point, timestamp, tomtom, weather)
                         self.write_metadata(point, metadata)
                     except Exception as exc:
                         self.logger.exception("Metadata failed for %s: %s", point.name, exc)
 
+                if self.requests_this_pass:
+                    if self.request_failures_this_pass:
+                        self.consecutive_failed_passes += 1
+                    else:
+                        self.consecutive_failed_passes = 0
+
                 elapsed = time.time() - start
-                sleep_time = max(0, self.config.metadata_interval_seconds - elapsed)
+                failure_backoff = 0
+                if self.consecutive_failed_passes:
+                    failure_backoff = min(
+                        self.config.metadata_failure_backoff_max_seconds,
+                        self.config.metadata_failure_backoff_base_seconds
+                        * (2 ** (self.consecutive_failed_passes - 1)),
+                    )
+                sleep_time = max(
+                    self.config.metadata_min_pass_interval_seconds,
+                    self.config.metadata_interval_seconds - elapsed,
+                    failure_backoff,
+                )
                 self.stop_event.wait(sleep_time)
         finally:
             session.close()
@@ -83,7 +114,12 @@ class MetadataCollector(threading.Thread):
     ) -> dict:
         tomtom = self.get_tomtom_cached(session, point)
         weather = self.get_openmeteo_cached(session, point)
+        return self.build_metadata_row(point, timestamp, tomtom, weather)
 
+    @staticmethod
+    def build_metadata_row(
+        point: CCTVPoint, timestamp: datetime, tomtom: dict, weather: dict
+    ) -> dict:
         row = {
             "cctv_name": point.name,
             "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
@@ -154,6 +190,50 @@ class MetadataCollector(threading.Thread):
         self.openmeteo_last_fetch[cache_key] = time.time()
         return data
 
+    def get_openmeteo_cached_batch(self, session: requests.Session) -> dict[str, dict]:
+        """Fetch weather for every point with one request when the cache expires."""
+        due = any(
+            self.should_fetch(
+                point.name, self.openmeteo_last_fetch, self.config.openmeteo_interval_seconds
+            )
+            for point in self.points
+        )
+        if not due:
+            return {
+                point.name: {
+                    **self.openmeteo_cache[point.name],
+                    "weather_cache_status": "cached",
+                }
+                for point in self.points
+            }
+
+        fetched_at = time.time()
+        fetched_at_text = now_local().strftime("%Y-%m-%d %H:%M:%S")
+        fetched = self.get_openmeteo_batch(session, self.points)
+        result: dict[str, dict] = {}
+        for point in self.points:
+            data = fetched[point.name]
+            if data.get("weather_status") == "error":
+                cached = self.openmeteo_cache.get(point.name)
+                if cached:
+                    data = {**cached, "weather_cache_status": "cached"}
+                else:
+                    data = {
+                        **data,
+                        "weather_cache_status": "fresh_fallback",
+                        "weather_last_api_call": fetched_at_text,
+                    }
+            else:
+                data = {
+                    **data,
+                    "weather_cache_status": "fresh",
+                    "weather_last_api_call": fetched_at_text,
+                }
+            self.openmeteo_cache[point.name] = data
+            self.openmeteo_last_fetch[point.name] = fetched_at
+            result[point.name] = data
+        return result
+
     def get_tomtom(self, session: requests.Session, point: CCTVPoint) -> dict:
         default = {
             "traffic_speed": None,
@@ -177,6 +257,7 @@ class MetadataCollector(threading.Thread):
             response.raise_for_status()
             flow = response.json().get("flowSegmentData", {})
 
+            self._record_request(False)
             return {
                 "traffic_speed": flow.get("currentSpeed"),
                 "traffic_freeflow": flow.get("freeFlowSpeed"),
@@ -187,8 +268,60 @@ class MetadataCollector(threading.Thread):
             }
 
         except (requests.RequestException, ValueError, KeyError) as exc:
+            self._record_request(True)
             self.logger.warning("TomTom failed for %s: %s", point.name, exc)
             return default
+
+    def get_openmeteo_batch(
+        self, session: requests.Session, points: list[CCTVPoint]
+    ) -> dict[str, dict]:
+        url = (
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={','.join(str(point.lat) for point in points)}&"
+            f"longitude={','.join(str(point.lon) for point in points)}"
+            "&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m"
+            "&timezone=Asia%2FJakarta"
+        )
+        try:
+            response = session.get(url, timeout=API_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                payloads = [payload] if len(points) == 1 else []
+            elif isinstance(payload, list):
+                payloads = payload
+            else:
+                payloads = []
+            if len(payloads) != len(points):
+                raise ValueError("Open-Meteo returned an unexpected number of locations")
+
+            result: dict[str, dict] = {}
+            for point, location in zip(points, payloads, strict=True):
+                current = location.get("current", {})
+                result[point.name] = {
+                    "weather_temp": current.get("temperature_2m"),
+                    "weather_humidity": current.get("relative_humidity_2m"),
+                    "weather_rain": current.get("rain"),
+                    "weather_wind_speed": current.get("wind_speed_10m"),
+                    "weather_source": "open-meteo",
+                    "weather_status": "ok",
+                }
+            self._record_request(False)
+            return result
+        except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as exc:
+            self._record_request(True)
+            self.logger.warning("Open-Meteo batch failed: %s", exc)
+            return {
+                point.name: {
+                    "weather_temp": None,
+                    "weather_humidity": None,
+                    "weather_rain": None,
+                    "weather_wind_speed": None,
+                    "weather_source": "open-meteo",
+                    "weather_status": "error",
+                }
+                for point in points
+            }
 
     def get_openmeteo(self, session: requests.Session, point: CCTVPoint) -> dict:
         default = {
@@ -212,6 +345,7 @@ class MetadataCollector(threading.Thread):
             response.raise_for_status()
             current = response.json().get("current", {})
 
+            self._record_request(False)
             return {
                 "weather_temp": current.get("temperature_2m"),
                 "weather_humidity": current.get("relative_humidity_2m"),
@@ -222,6 +356,7 @@ class MetadataCollector(threading.Thread):
             }
 
         except (requests.RequestException, ValueError, KeyError) as exc:
+            self._record_request(True)
             self.logger.warning("Open-Meteo failed for %s: %s", point.name, exc)
             return default
 

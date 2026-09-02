@@ -93,6 +93,9 @@ class MetadataConfig:
     default_lat: float
     default_lon: float
     tomtom_api_key: str | None = None
+    min_pass_interval_seconds: int = 5
+    failure_backoff_base_seconds: int = 5
+    failure_backoff_max_seconds: int = 300
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,10 @@ class ArchiveConfig:
     max_bitrate: str
     buffer_size: str
     output_height: int
+    vaapi_device: str = "/dev/dri/renderD128"
+    retry_base_seconds: int = 60
+    retry_max_seconds: int = 3600
+    max_attempts: int = 3
 
 
 @dataclass(frozen=True)
@@ -117,6 +124,8 @@ class StorageConfig:
     retention_days: int
     min_free_space_gb: float
     disk_check_seconds: int
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backup_count: int = 5
 
 
 @dataclass(frozen=True)
@@ -124,6 +133,7 @@ class NetworkConfig:
     preflight_check: bool
     offline_retry_seconds: int
     network_retry_seconds: int
+    expired_url_escalation_threshold: int = 3
 
 
 @dataclass(frozen=True)
@@ -169,6 +179,18 @@ class RuntimeConfig:
         return self.metadata.openmeteo_interval_seconds
 
     @property
+    def metadata_min_pass_interval_seconds(self) -> int:
+        return self.metadata.min_pass_interval_seconds
+
+    @property
+    def metadata_failure_backoff_base_seconds(self) -> int:
+        return self.metadata.failure_backoff_base_seconds
+
+    @property
+    def metadata_failure_backoff_max_seconds(self) -> int:
+        return self.metadata.failure_backoff_max_seconds
+
+    @property
     def disk_check_seconds(self) -> int:
         return self.storage.disk_check_seconds
 
@@ -179,6 +201,14 @@ class RuntimeConfig:
     @property
     def min_free_space_gb(self) -> float:
         return self.storage.min_free_space_gb
+
+    @property
+    def log_max_bytes(self) -> int:
+        return self.storage.log_max_bytes
+
+    @property
+    def log_backup_count(self) -> int:
+        return self.storage.log_backup_count
 
     @property
     def tomtom_api_key(self) -> str | None:
@@ -325,6 +355,22 @@ class RuntimeConfig:
         return self.archive.output_height
 
     @property
+    def archive_vaapi_device(self) -> str:
+        return self.archive.vaapi_device
+
+    @property
+    def archive_retry_base_seconds(self) -> int:
+        return self.archive.retry_base_seconds
+
+    @property
+    def archive_retry_max_seconds(self) -> int:
+        return self.archive.retry_max_seconds
+
+    @property
+    def archive_max_attempts(self) -> int:
+        return self.archive.max_attempts
+
+    @property
     def preflight_check(self) -> bool:
         return self.network.preflight_check
 
@@ -335,6 +381,10 @@ class RuntimeConfig:
     @property
     def network_retry_seconds(self) -> int:
         return self.network.network_retry_seconds
+
+    @property
+    def expired_url_escalation_threshold(self) -> int:
+        return self.network.expired_url_escalation_threshold
 
 
 # =========================================================
@@ -388,6 +438,11 @@ def is_truthy(value: str) -> bool:
 def validate_positive_number(name: str, value: float) -> None:
     if value <= 0:
         raise ValueError(f"{name} harus lebih besar dari 0.")
+
+
+def validate_nonnegative_number(name: str, value: float) -> None:
+    if value < 0:
+        raise ValueError(f"{name} tidak boleh kurang dari 0.")
 
 
 def validate_video_container(name: str, value: str) -> None:
@@ -512,6 +567,27 @@ METADATA_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | Non
         DEFAULT_OPENMETEO_INTERVAL_SECONDS,
         None,
     ),
+    (
+        "min_pass_interval_seconds",
+        "METADATA_MIN_PASS_INTERVAL_SECONDS",
+        int,
+        5,
+        validate_positive_number,
+    ),
+    (
+        "failure_backoff_base_seconds",
+        "METADATA_FAILURE_BACKOFF_BASE_SECONDS",
+        int,
+        5,
+        validate_positive_number,
+    ),
+    (
+        "failure_backoff_max_seconds",
+        "METADATA_FAILURE_BACKOFF_MAX_SECONDS",
+        int,
+        300,
+        validate_positive_number,
+    ),
     ("default_lat", "DEFAULT_LAT", float, float(DEFAULT_LAT), None),
     ("default_lon", "DEFAULT_LON", float, float(DEFAULT_LON), None),
 ]
@@ -529,16 +605,29 @@ ARCHIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None
     ("max_bitrate", "ARCHIVE_MAX_BITRATE", str, "900k", None),
     ("buffer_size", "ARCHIVE_BUFFER_SIZE", str, "1300k", None),
     ("output_height", "ARCHIVE_OUTPUT_HEIGHT", int, 0, None),
+    ("vaapi_device", "ARCHIVE_VAAPI_DEVICE", str, "/dev/dri/renderD128", None),
+    ("retry_base_seconds", "ARCHIVE_RETRY_BASE_SECONDS", int, 60, validate_positive_number),
+    ("retry_max_seconds", "ARCHIVE_RETRY_MAX_SECONDS", int, 3600, validate_positive_number),
+    ("max_attempts", "ARCHIVE_MAX_ATTEMPTS", int, 3, validate_positive_number),
 ]
 
 STORAGE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None]] = [
     ("disk_check_seconds", "DISK_CHECK_SECONDS", int, DEFAULT_DISK_CHECK_SECONDS, None),
+    ("log_max_bytes", "LOG_MAX_BYTES", int, 10 * 1024 * 1024, validate_positive_number),
+    ("log_backup_count", "LOG_BACKUP_COUNT", int, 5, validate_nonnegative_number),
 ]
 
 NETWORK_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None]] = [
     ("preflight_check", "PREFLIGHT_CHECK", bool, True, None),
     ("offline_retry_seconds", "OFFLINE_RETRY_SECONDS", int, 300, None),
     ("network_retry_seconds", "NETWORK_RETRY_SECONDS", int, 60, None),
+    (
+        "expired_url_escalation_threshold",
+        "EXPIRED_URL_ESCALATION_THRESHOLD",
+        int,
+        3,
+        validate_positive_number,
+    ),
 ]
 
 

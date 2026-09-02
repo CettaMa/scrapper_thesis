@@ -74,6 +74,71 @@ def test_doh_cache_fifo_eviction():
         DoHResolver._cache.clear()
 
 
+def test_openmeteo_batch_maps_locations_and_uses_one_request(tmp_path: Path):
+    points = [
+        CCTVPoint(name="point_a", url="http://example.com/a.m3u8", lat=-6.85, lon=107.5),
+        CCTVPoint(name="point_b", url="http://example.com/b.m3u8", lat=-6.86, lon=107.51),
+    ]
+    cfg = make_dummy_config(tmp_path, openmeteo_interval_seconds=60)
+    collector = MetadataCollector(points, cfg, threading.Event())
+    session = requests.Session()
+    response = MagicMock()
+    response.json.return_value = [
+        {"current": {"temperature_2m": 27.5}},
+        {"current": {"temperature_2m": 28.5}},
+    ]
+    response.raise_for_status = MagicMock()
+
+    with patch.object(session, "get", return_value=response) as mock_get:
+        first = collector.get_openmeteo_cached_batch(session)
+        second = collector.get_openmeteo_cached_batch(session)
+
+    assert mock_get.call_count == 1
+    url = mock_get.call_args.args[0]
+    assert "latitude=-6.85,-6.86" in url
+    assert first["point_a"]["weather_temp"] == pytest.approx(27.5)
+    assert first["point_b"]["weather_temp"] == pytest.approx(28.5)
+    assert first["point_a"]["weather_cache_status"] == "fresh"
+    assert second["point_a"]["weather_cache_status"] == "cached"
+
+
+def test_metadata_failure_backoff_increases_between_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    point = CCTVPoint(name="backoff_point", url="http://example.com/a.m3u8", lat=-6.85, lon=107.5)
+    cfg = make_dummy_config(
+        tmp_path,
+        metadata_interval_seconds=1,
+        metadata_min_pass_interval_seconds=5,
+        metadata_failure_backoff_base_seconds=5,
+        metadata_failure_backoff_max_seconds=60,
+    )
+    stop_event = threading.Event()
+    waits: list[float] = []
+
+    def stop_after_two_passes(timeout: float) -> bool:
+        waits.append(timeout)
+        if len(waits) >= 2:
+            stop_event.set()
+        return True
+
+    monkeypatch.setattr(stop_event, "wait", stop_after_two_passes)
+    collector = MetadataCollector([point], cfg, stop_event)
+
+    def failed_weather(session: requests.Session) -> dict[str, dict]:
+        collector._record_request(True)
+        return {point.name: {"weather_cache_status": "fresh_fallback"}}
+
+    monkeypatch.setattr(collector, "get_openmeteo_cached_batch", failed_weather)
+    monkeypatch.setattr(collector, "get_tomtom_cached", lambda session, item: {})
+    monkeypatch.setattr(collector, "write_metadata", lambda item, row: None)
+    collector.run()
+
+    assert len(waits) == 2
+    assert waits[0] >= 5
+    assert waits[1] >= 10
+
+
 def test_metadata_collector_session_and_caching(tmp_path: Path):
     point = CCTVPoint(name="padalarang", url="http://example.com/live.m3u8", lat=-6.85, lon=107.5)
     cfg = make_dummy_config(
