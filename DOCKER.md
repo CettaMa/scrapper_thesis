@@ -49,11 +49,16 @@ ARCHIVE_FALLBACK_ENCODER=libx264
 ARCHIVE_PRESET=veryfast
 ```
 
-VA-API requires an Intel GPU/media device. On Linux hosts with Intel graphics, add this device mapping to the service if `/dev/dri` exists:
+VA-API requires an Intel GPU/media device. On Linux hosts with Intel graphics, add this device mapping to the service if `/dev/dri` exists.
+
+The render group GID is host-specific. For this host, `/dev/dri/renderD128` requires GID `991`; do not assume the common default `109`. Compose requires `RENDER_GID` and `VIDEO_GID` explicitly so an incorrect fallback cannot silently block `appuser`.
 
 ```yaml
 devices:
   - /dev/dri:/dev/dri
+group_add:
+  - "${RENDER_GID:?Set RENDER_GID to the host render group GID}"
+  - "${VIDEO_GID:?Set VIDEO_GID to the host video group GID}"
 ```
 
 If VA-API is unavailable, the archive worker automatically retries the affected window with `libx264` instead of losing the recording. A VPS without an Intel media device will therefore use the CPU fallback.

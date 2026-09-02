@@ -38,6 +38,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
+        gosu \
         intel-media-va-driver-non-free \
         libva-drm2 \
         libva2 \
@@ -54,17 +55,16 @@ COPY --from=builder /opt/venv /opt/venv
 COPY main.py ./
 COPY cctv_scraper/ ./cctv_scraper/
 COPY scripts/test_vaapi.sh /usr/local/bin/test-vaapi
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY cctv_points.csv ./
 
 # Create host-matching render/video groups and assign appuser
 RUN groupadd -g 991 render 2>/dev/null || true \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
     && usermod -aG video,render appuser \
-    && chmod +x /usr/local/bin/test-vaapi \
+    && chmod +x /usr/local/bin/test-vaapi /usr/local/bin/docker-entrypoint.sh \
     && mkdir -p /app/dataset \
     && chown -R appuser:appuser /app
 
-USER appuser
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python3", "main.py"]

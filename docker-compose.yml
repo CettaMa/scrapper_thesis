@@ -16,9 +16,10 @@ services:
       TZ: Asia/Jakarta
       LIBVA_DRIVER_NAME: iHD
       LIBVA_DRIVERS_PATH: /usr/lib/x86_64-linux-gnu/dri
+    # These must match the host device group IDs; do not use hard-coded defaults.
     group_add:
-      - "${RENDER_GID:-991}"
-      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:?Set RENDER_GID to the host render group GID}"
+      - "${VIDEO_GID:?Set VIDEO_GID to the host video group GID}"
     volumes:
       - ./dataset:/app/dataset
       - ./cctv_points.csv:/app/cctv_points.csv:ro
