@@ -36,7 +36,9 @@ def _hardware_probe_command(config: RuntimeConfig) -> list[str]:
         "-f",
         "lavfi",
         "-i",
-        "testsrc=size=16x16:rate=1",
+        # Gen9 VA-API rejects anything under 32x32; keep the probe comfortably above
+        # every encoder's minimum so a valid device is never mistaken for a broken one.
+        "testsrc=size=320x240:rate=1",
         "-t",
         "1",
         "-vf",
