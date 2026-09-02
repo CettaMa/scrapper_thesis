@@ -108,7 +108,9 @@ class ArchiveEncoder(threading.Thread):
 
             result = self.run_ffmpeg(command)
 
-            if result.returncode != 0 and self.is_qsv_encoder(self.config.archive.video_encoder):
+            if result.returncode != 0 and self.is_hardware_encoder(
+                self.config.archive.video_encoder
+            ):
                 fallback = self.config.archive.fallback_video_encoder
                 self.logger.warning(
                     "QuickSync archive encode failed for %s; retrying with %s | stderr=%s",
@@ -160,8 +162,8 @@ class ArchiveEncoder(threading.Thread):
                 f.write(f"file '{escaped}'\n")
 
     @staticmethod
-    def is_qsv_encoder(encoder: str) -> bool:
-        return encoder in {"h264_qsv", "hevc_qsv"}
+    def is_hardware_encoder(encoder: str) -> bool:
+        return encoder in {"h264_qsv", "hevc_qsv", "h264_vaapi", "hevc_vaapi"}
 
     def run_ffmpeg(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -196,13 +198,16 @@ class ArchiveEncoder(threading.Thread):
             "-an",
         ]
 
+        encoder = encoder or self.config.archive_video_encoder
         filters = []
         if self.config.archive_output_height > 0:
             filters.append(f"scale=-2:{self.config.archive_output_height}")
+        if encoder in {"h264_vaapi", "hevc_vaapi"}:
+            # VA-API encoders require hardware-uploaded NV12 frames.
+            filters.extend(["format=nv12", "hwupload"])
         if filters:
             cmd += ["-vf", ",".join(filters)]
 
-        encoder = encoder or self.config.archive_video_encoder
         cmd += ["-c:v", encoder]
 
         if encoder in {"hevc_nvenc", "h264_nvenc"}:
@@ -225,6 +230,15 @@ class ArchiveEncoder(threading.Thread):
             cmd += [
                 "-preset",
                 preset,
+                "-b:v",
+                self.config.archive_target_bitrate,
+                "-maxrate:v",
+                self.config.archive_max_bitrate,
+                "-bufsize:v",
+                self.config.archive_buffer_size,
+            ]
+        elif encoder in {"h264_vaapi", "hevc_vaapi"}:
+            cmd += [
                 "-b:v",
                 self.config.archive_target_bitrate,
                 "-maxrate:v",

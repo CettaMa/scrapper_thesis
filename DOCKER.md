@@ -31,29 +31,32 @@ Stop:
 docker compose down
 ```
 
-## NVIDIA GPU / NVENC Check
+## Intel QuickSync / FFmpeg Check
 
-Install Docker Desktop plus NVIDIA Container Toolkit support first. Then verify FFmpeg sees NVENC inside the image:
+The image does not contain NVIDIA CUDA or require NVIDIA Container Toolkit. It is based on standard Ubuntu and includes FFmpeg plus Intel media runtime libraries.
+
+Check the available encoders:
 
 ```powershell
 docker compose run --rm cctv-scraper ffmpeg -hide_banner -encoders
 ```
 
-Look for:
-
-```text
-h264_nvenc
-hevc_nvenc
-```
-
-Intel QuickSync can use `h264_qsv` or `hevc_qsv` when FFmpeg and the host expose the Intel media device. Use:
+The archive configuration uses:
 
 ```env
-ARCHIVE_VIDEO_ENCODER=h264_qsv
+ARCHIVE_VIDEO_ENCODER=h264_vaapi
+ARCHIVE_FALLBACK_ENCODER=libx264
 ARCHIVE_PRESET=veryfast
 ```
 
-On Linux Docker hosts, the compose file exposes `/dev/dri`; install a matching Intel media driver on the host and ensure the container user can access the device. On Windows, validate `h264_qsv` with the native FFmpeg installation or Docker Desktop GPU support before deployment. If QuickSync initialization fails, the archive worker retries with `ARCHIVE_FALLBACK_ENCODER` (default `libx264`) instead of losing the window.
+VA-API requires an Intel GPU/media device. On Linux hosts with Intel graphics, add this device mapping to the service if `/dev/dri` exists:
+
+```yaml
+devices:
+  - /dev/dri:/dev/dri
+```
+
+If VA-API is unavailable, the archive worker automatically retries the affected window with `libx264` instead of losing the recording. A VPS without an Intel media device will therefore use the CPU fallback.
 
 ## Data And Config
 

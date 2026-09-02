@@ -4,7 +4,6 @@ services:
     image: cctv-scraper:latest
     container_name: cctv-scraper
     restart: unless-stopped
-    # Required for Intel QuickSync on Linux hosts.
     devices:
       - /dev/dri:/dev/dri
     extra_hosts:
@@ -15,6 +14,12 @@ services:
       CCTV_CONFIG_FILE: /app/cctv_points.csv
       CCTV_OUTPUT_ROOT: /app/dataset
       TZ: Asia/Jakarta
+      LIBVA_DRIVER_NAME: iHD
+      LIBVA_DRIVERS_PATH: /usr/lib/x86_64-linux-gnu/dri
+    # Set RENDER_GID and VIDEO_GID from the host when they differ from defaults.
+    group_add:
+      - "${RENDER_GID:-109}"
+      - "${VIDEO_GID:-44}"
     volumes:
       - ./dataset:/app/dataset
       - ./cctv_points.csv:/app/cctv_points.csv:ro

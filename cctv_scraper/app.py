@@ -21,7 +21,7 @@ def validate_video_encoder(config: RuntimeConfig) -> None:
         required_encoders.add(config.video_encoder)
     if config.archive_encoder_enabled:
         required_encoders.add(config.archive_video_encoder)
-        if config.archive_video_encoder in {"h264_qsv", "hevc_qsv"}:
+        if config.archive_video_encoder in {"h264_qsv", "hevc_qsv", "h264_vaapi", "hevc_vaapi"}:
             required_encoders.add(config.archive.fallback_video_encoder)
 
     if not required_encoders:
@@ -44,7 +44,7 @@ def validate_video_encoder(config: RuntimeConfig) -> None:
     if missing:
         raise RuntimeError(
             f"Encoder FFmpeg tidak tersedia: {', '.join(missing)}. "
-            "Periksa encoder hardware, atau ubah encoder ke h264_qsv, hevc_qsv, libx265, atau libx264."
+            "Periksa encoder hardware, atau ubah encoder ke h264_vaapi, hevc_vaapi, libx265, atau libx264."
         )
 
 

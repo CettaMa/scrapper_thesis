@@ -522,7 +522,7 @@ ARCHIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None
     ("scan_seconds", "ARCHIVE_SCAN_SECONDS", int, 60, validate_positive_number),
     ("safe_age_seconds", "ARCHIVE_SAFE_AGE_SECONDS", int, 90, validate_positive_number),
     ("delete_raw_after_success", "ARCHIVE_DELETE_RAW_AFTER_SUCCESS", bool, True, None),
-    ("video_encoder", "ARCHIVE_VIDEO_ENCODER", str, "h264_qsv", None),
+    ("video_encoder", "ARCHIVE_VIDEO_ENCODER", str, "h264_vaapi", None),
     ("fallback_video_encoder", "ARCHIVE_FALLBACK_ENCODER", str, "libx264", None),
     ("preset", "ARCHIVE_PRESET", str, "p4", None),
     ("target_bitrate", "ARCHIVE_TARGET_BITRATE", str, "650k", None),
