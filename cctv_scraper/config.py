@@ -373,7 +373,13 @@ ARCHIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None
     ("retry_max_seconds", "ARCHIVE_RETRY_MAX_SECONDS", int, 3600, validate_positive_number),
     ("max_attempts", "ARCHIVE_MAX_ATTEMPTS", int, 3, validate_positive_number),
     ("daily_archive_enabled", "DAILY_ARCHIVE_ENABLED", bool, True, None),
-    ("daily_archive_scan_seconds", "DAILY_ARCHIVE_SCAN_SECONDS", int, 300, validate_positive_number),
+    (
+        "daily_archive_scan_seconds",
+        "DAILY_ARCHIVE_SCAN_SECONDS",
+        int,
+        300,
+        validate_positive_number,
+    ),
     ("daily_archive_delete_source", "DAILY_ARCHIVE_DELETE_SOURCE", bool, False, None),
     ("archiver_binary", "ARCHIVER_BINARY", str, "7z", None),
 ]

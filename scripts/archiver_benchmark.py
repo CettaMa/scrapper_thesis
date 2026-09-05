@@ -12,6 +12,7 @@ Measures per method:
 Usage:
     python3 scripts/archiver_benchmark.py [--data-dir DIR] [--out CSV] [--methods ...]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,10 +35,10 @@ ZIP_PACK_FMT = (
     "[zf.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), src)) "
     "for r, _, fs in os.walk(src) for f in fs]; zf.close()"
 )
-ZIP_UNPACK = (
-    "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])"
+ZIP_UNPACK = "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])"
+ZIP_TEST = (
+    "import sys, zipfile; sys.exit(0 if zipfile.ZipFile(sys.argv[1]).testzip() is None else 1)"
 )
-ZIP_TEST = "import sys, zipfile; sys.exit(0 if zipfile.ZipFile(sys.argv[1]).testzip() is None else 1)"
 
 
 @dataclass
@@ -45,8 +46,8 @@ class Row:
     method: str
     src_bytes: int
     arc_bytes: int = 0
-    ratio: float = 0.0          # src / arc
-    saved_pct: float = 0.0      # 1 - arc/src
+    ratio: float = 0.0  # src / arc
+    saved_pct: float = 0.0  # 1 - arc/src
     archive_s: float = 0.0
     archive_cpu_s: float = 0.0
     archive_mbps: float = 0.0
@@ -133,17 +134,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", type=Path, default=REPO / "dataset/2026-09-03")
     ap.add_argument("--out", type=Path, default=REPO / "benchmark_archiver_results.csv")
-    ap.add_argument("--methods", nargs="*", default=None,
-                    help="subset of: " + ", ".join(METHODS))
-    ap.add_argument("--tmpdir", type=Path,
-                    default=Path.home() / ".cache/archbench")
+    ap.add_argument("--methods", nargs="*", default=None, help="subset of: " + ", ".join(METHODS))
+    ap.add_argument("--tmpdir", type=Path, default=Path.home() / ".cache/archbench")
     args = ap.parse_args()
 
     methods = args.methods or list(METHODS)
     data = args.data_dir.resolve()
     src_bytes = sum(f.stat().st_size for f in data.rglob("*") if f.is_file())
-    print(f"Data: {data}  ({src_bytes/1e6:.1f} MB, "
-          f"{sum(1 for _ in data.rglob('*') if _.is_file())} files)")
+    print(
+        f"Data: {data}  ({src_bytes / 1e6:.1f} MB, "
+        f"{sum(1 for _ in data.rglob('*') if _.is_file())} files)"
+    )
     print(f"Methods: {', '.join(methods)}\n")
 
     rows: list[Row] = []
@@ -154,7 +155,10 @@ def main() -> None:
         if name not in METHODS:
             sys.exit(f"unknown method: {name}")
         pack, unpack, verify = METHODS[name]
-        arc = tmp / f"{name}.{ 'tar' if name=='tar_store' else 'tar.gz' if 'gzip' in name or 'pigz' in name else 'tar.bz2' if 'bzip2' in name else 'tar.xz' if 'xz' in name else 'tar.zst' if 'zstd' in name else 'zip' }"
+        arc = (
+            tmp
+            / f"{name}.{'tar' if name == 'tar_store' else 'tar.gz' if 'gzip' in name or 'pigz' in name else 'tar.bz2' if 'bzip2' in name else 'tar.xz' if 'xz' in name else 'tar.zst' if 'zstd' in name else 'zip'}"
+        )
         outdir = tmp / f"out_{name}"
         outdir.mkdir(exist_ok=True)
         kw = {"ARC": str(arc), "DATA": str(data), "OUT": str(outdir)}
@@ -167,6 +171,7 @@ def main() -> None:
             w2, _, _ = run_meas(fill(unpack, **kw))
             # verify: re-hash extracted vs source
             t0 = time.perf_counter()
+
             def hash_dir(d: Path) -> str:
                 h = hashlib.sha256()
                 for p in sorted(d.rglob("*")):
@@ -176,24 +181,33 @@ def main() -> None:
                             for chunk in iter(lambda: fh.read(1 << 20), b""):
                                 h.update(chunk)
                 return h.hexdigest()
+
             ok = hash_dir(data) == hash_dir(outdir)
             verify_t = time.perf_counter() - t0
 
-            row = Row(method=name, src_bytes=src_bytes, arc_bytes=size,
-                      ratio=round(src_bytes / size, 3),
-                      saved_pct=round(100 * (1 - size / src_bytes), 2),
-                      archive_s=round(wall, 2), archive_cpu_s=round(cpu, 2),
-                      archive_mbps=round(src_bytes / wall / 1e6, 2),
-                      decompress_s=round(w2, 2),
-                      decompress_mbps=round(src_bytes / w2 / 1e6, 2),
-                      verify_s=round(verify_t, 2), peak_rss_mb=round(rss, 1),
-                      verified=ok)
+            row = Row(
+                method=name,
+                src_bytes=src_bytes,
+                arc_bytes=size,
+                ratio=round(src_bytes / size, 3),
+                saved_pct=round(100 * (1 - size / src_bytes), 2),
+                archive_s=round(wall, 2),
+                archive_cpu_s=round(cpu, 2),
+                archive_mbps=round(src_bytes / wall / 1e6, 2),
+                decompress_s=round(w2, 2),
+                decompress_mbps=round(src_bytes / w2 / 1e6, 2),
+                verify_s=round(verify_t, 2),
+                peak_rss_mb=round(rss, 1),
+                verified=ok,
+            )
             rows.append(row)
-            print(f"   {size/1e6:8.1f} MB  ratio {row.ratio:5.2f}x  "
-                  f"saved {row.saved_pct:5.1f}%  arch {wall:6.1f}s "
-                  f"({row.archive_mbps:6.1f} MB/s)  unarch {w2:6.1f}s "
-                  f"({row.decompress_mbps:6.1f} MB/s)  RSS {rss:6.0f} MB  "
-                  f"verified={ok}")
+            print(
+                f"   {size / 1e6:8.1f} MB  ratio {row.ratio:5.2f}x  "
+                f"saved {row.saved_pct:5.1f}%  arch {wall:6.1f}s "
+                f"({row.archive_mbps:6.1f} MB/s)  unarch {w2:6.1f}s "
+                f"({row.decompress_mbps:6.1f} MB/s)  RSS {rss:6.0f} MB  "
+                f"verified={ok}"
+            )
         except Exception as e:
             print(f"   FAILED: {e}", file=sys.stderr)
         finally:
@@ -209,15 +223,19 @@ def main() -> None:
         w.writerows([asdict(r) for r in rows])
     print(f"Results written to {args.out}\n")
 
-    hdr = (f"{'method':<15}{'size MB':>10}{'ratio':>8}{'saved%':>8}"
-           f"{'arch s':>9}{'MB/s':>9}{'unc s':>8}{'MB/s':>9}{'RSS MB':>9}{'ok':>4}")
+    hdr = (
+        f"{'method':<15}{'size MB':>10}{'ratio':>8}{'saved%':>8}"
+        f"{'arch s':>9}{'MB/s':>9}{'unc s':>8}{'MB/s':>9}{'RSS MB':>9}{'ok':>4}"
+    )
     print(hdr)
     print("-" * len(hdr))
     for r in sorted(rows, key=lambda r: -r.ratio):
-        print(f"{r.method:<15}{r.arc_bytes/1e6:>10.1f}{r.ratio:>8.2f}"
-              f"{r.saved_pct:>8.1f}{r.archive_s:>9.1f}{r.archive_mbps:>9.1f}"
-              f"{r.decompress_s:>8.1f}{r.decompress_mbps:>9.1f}"
-              f"{r.peak_rss_mb:>9.0f}{str(r.verified):>5}")
+        print(
+            f"{r.method:<15}{r.arc_bytes / 1e6:>10.1f}{r.ratio:>8.2f}"
+            f"{r.saved_pct:>8.1f}{r.archive_s:>9.1f}{r.archive_mbps:>9.1f}"
+            f"{r.decompress_s:>8.1f}{r.decompress_mbps:>9.1f}"
+            f"{r.peak_rss_mb:>9.0f}{str(r.verified):>5}"
+        )
 
 
 if __name__ == "__main__":

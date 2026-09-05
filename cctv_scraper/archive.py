@@ -548,7 +548,9 @@ class DailyArchiver(threading.Thread):
         if output.exists():
             if self.test_archive(output.resolve()):
                 return
-            self.logger.warning("Existing daily archive failed verification; recreating: %s", output)
+            self.logger.warning(
+                "Existing daily archive failed verification; recreating: %s", output
+            )
             output.unlink(missing_ok=True)
 
         temporary = output.with_name(f".{output.name}.tmp")
@@ -578,7 +580,11 @@ class DailyArchiver(threading.Thread):
             self.record_failure(failure_marker, f"archiver could not run: {exc}")
             return
 
-        if result.returncode != 0 or not temporary.exists() or not self.test_archive(temporary.resolve()):
+        if (
+            result.returncode != 0
+            or not temporary.exists()
+            or not self.test_archive(temporary.resolve())
+        ):
             detail = trim_stderr(result.stdout or "")
             self.record_failure(
                 failure_marker,
@@ -614,7 +620,9 @@ class DailyArchiver(threading.Thread):
     def record_failure(self, marker: Path, reason: str) -> None:
         try:
             marker.write_text(
-                json.dumps({"status": "failed", "failed_at": time.time(), "reason": reason}, indent=2),
+                json.dumps(
+                    {"status": "failed", "failed_at": time.time(), "reason": reason}, indent=2
+                ),
                 encoding="utf-8",
             )
         except OSError as exc:

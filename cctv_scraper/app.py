@@ -206,7 +206,10 @@ class CCTVApp:
         logging.info("Archive VA-API/QSV device: %s", self.config.archive.vaapi_device)
         logging.info("Archive retry max attempts: %s", self.config.archive.max_attempts)
         logging.info("Daily 7-Zip archive enabled: %s", self.config.archive.daily_archive_enabled)
-        logging.info("Daily 7-Zip archive scan interval: %s seconds", self.config.archive.daily_archive_scan_seconds)
+        logging.info(
+            "Daily 7-Zip archive scan interval: %s seconds",
+            self.config.archive.daily_archive_scan_seconds,
+        )
         logging.info("Daily 7-Zip archiver binary: %s", self.config.archive.archiver_binary)
         logging.info("Archive target bitrate: %s", self.config.archive.target_bitrate)
         logging.info("Archive maximum bitrate: %s", self.config.archive.max_bitrate)
