@@ -28,8 +28,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
-import zipfile
-
 ZIP_PACK_FMT = (
     "import sys, zipfile, os; arc, src = sys.argv[1], sys.argv[2]; "
     "zf = zipfile.ZipFile(arc, 'w', zipfile.ZIP_DEFLATED, compresslevel={level}); "
