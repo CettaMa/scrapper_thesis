@@ -116,6 +116,10 @@ class ArchiveConfig:
     retry_base_seconds: int = 60
     retry_max_seconds: int = 3600
     max_attempts: int = 3
+    daily_archive_enabled: bool = True
+    daily_archive_scan_seconds: int = 300
+    daily_archive_delete_source: bool = False
+    archiver_binary: str = "7z"
 
 
 @dataclass(frozen=True)
@@ -368,6 +372,10 @@ ARCHIVE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None
     ("retry_base_seconds", "ARCHIVE_RETRY_BASE_SECONDS", int, 60, validate_positive_number),
     ("retry_max_seconds", "ARCHIVE_RETRY_MAX_SECONDS", int, 3600, validate_positive_number),
     ("max_attempts", "ARCHIVE_MAX_ATTEMPTS", int, 3, validate_positive_number),
+    ("daily_archive_enabled", "DAILY_ARCHIVE_ENABLED", bool, True, None),
+    ("daily_archive_scan_seconds", "DAILY_ARCHIVE_SCAN_SECONDS", int, 300, validate_positive_number),
+    ("daily_archive_delete_source", "DAILY_ARCHIVE_DELETE_SOURCE", bool, False, None),
+    ("archiver_binary", "ARCHIVER_BINARY", str, "7z", None),
 ]
 
 STORAGE_SPECS: list[tuple[str, str, type, Any, Callable[[str, Any], None] | None]] = [

@@ -7,7 +7,7 @@ from dataclasses import replace
 
 # Ensure DoH patch is loaded
 import cctv_scraper.doh  # noqa: F401
-from cctv_scraper.archive import ArchiveEncoder
+from cctv_scraper.archive import ArchiveEncoder, DailyArchiver
 from cctv_scraper.config import RuntimeConfig, load_cctv_points
 from cctv_scraper.disk import DiskMonitor
 from cctv_scraper.logging_setup import setup_logging
@@ -205,6 +205,9 @@ class CCTVApp:
         logging.info("Archive video encoder: %s", self.config.archive.video_encoder)
         logging.info("Archive VA-API/QSV device: %s", self.config.archive.vaapi_device)
         logging.info("Archive retry max attempts: %s", self.config.archive.max_attempts)
+        logging.info("Daily 7-Zip archive enabled: %s", self.config.archive.daily_archive_enabled)
+        logging.info("Daily 7-Zip archive scan interval: %s seconds", self.config.archive.daily_archive_scan_seconds)
+        logging.info("Daily 7-Zip archiver binary: %s", self.config.archive.archiver_binary)
         logging.info("Archive target bitrate: %s", self.config.archive.target_bitrate)
         logging.info("Archive maximum bitrate: %s", self.config.archive.max_bitrate)
         logging.info("Preflight check: %s", self.config.network.preflight_check)
@@ -261,6 +264,10 @@ class CCTVApp:
         archive = ArchiveEncoder(points, self.config, self.stop_event)
         self.threads.append(archive)
         archive.start()
+
+        daily_archiver = DailyArchiver(self.config, self.stop_event)
+        self.threads.append(daily_archiver)
+        daily_archiver.start()
 
         disk = DiskMonitor(self.config, self.stop_event)
         self.threads.append(disk)

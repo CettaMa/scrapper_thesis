@@ -1,5 +1,5 @@
 from cctv_scraper.app import CCTVApp, validate_video_encoder
-from cctv_scraper.archive import ArchiveEncoder
+from cctv_scraper.archive import ArchiveEncoder, DailyArchiver
 from cctv_scraper.cli import main, parse_args
 from cctv_scraper.config import (
     ArchiveConfig,
@@ -22,6 +22,7 @@ from cctv_scraper.recorder import CCTVRecorder
 __all__ = [
     "ArchiveConfig",
     "ArchiveEncoder",
+    "DailyArchiver",
     "CCTVApp",
     "CCTVPoint",
     "CCTVRecorder",

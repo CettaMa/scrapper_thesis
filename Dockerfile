@@ -38,6 +38,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
+        7zip \
         gosu \
         intel-media-va-driver-non-free \
         libva-drm2 \

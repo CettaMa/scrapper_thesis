@@ -92,3 +92,8 @@ dataset/<date>/<camera>/metadata/*.csv
 ```
 
 The Docker compose configuration mounts `./dataset` to `/app/dataset`, so files remain available on the host. Set `ARCHIVE_DELETE_RAW_AFTER_SUCCESS=true` to remove raw `.ts` segments after successful local MP4 archiving, or set it to `false` to retain both formats.
+
+The image also includes `7z`. Completed dates are written as verified Store archives in
+`dataset/archives/YYYY-MM-DD.7z`. Configure `DAILY_ARCHIVE_SCAN_SECONDS` to change the scan
+interval. Source date directories are retained by default; set
+`DAILY_ARCHIVE_DELETE_SOURCE=true` only after confirming the transfer workflow.

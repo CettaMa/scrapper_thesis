@@ -1,9 +1,10 @@
 # CCTV 24/7 Scraper
 
 This project records public HLS CCTV streams continuously with FFmpeg, collects TomTom traffic
-and Open-Meteo weather metadata, and converts completed raw transport-stream segments into local
-five-minute MP4 archives. The dataset is kept on local disk for thesis analysis; there is no
-Google Drive upload component.
+and Open-Meteo weather metadata, and converts completed raw transport-stream segments into local five-minute MP4 archives.
+Completed dataset days are also packaged into verified, uncompressed 7-Zip Store archives for
+transfer to a personal computer. The dataset is kept on local disk for thesis analysis; there is
+no Google Drive upload component.
 
 ## Requirements
 
@@ -47,6 +48,10 @@ ARCHIVE_VIDEO_ENCODER=h264_vaapi
 ARCHIVE_FALLBACK_ENCODER=libx264
 ARCHIVE_VAAPI_DEVICE=/dev/dri/renderD128
 ARCHIVE_DELETE_RAW_AFTER_SUCCESS=true
+DAILY_ARCHIVE_ENABLED=true
+DAILY_ARCHIVE_SCAN_SECONDS=300
+DAILY_ARCHIVE_DELETE_SOURCE=false
+ARCHIVER_BINARY=7z
 TOMTOM_API=your_tomtom_key
 ```
 
@@ -113,6 +118,8 @@ dataset/
 │       │   └── .<archive>.mp4.manifest.json
 │       └── metadata/
 │           └── <camera>_YYYY-MM-DD_metadata.csv
+├── archives/
+│   └── YYYY-MM-DD.7z
 ├── logs/
 │   ├── scraper.log
 │   ├── <camera>.log
@@ -124,7 +131,11 @@ dataset/
 
 Archive manifests record the source window, segment count, covered duration, and encoder actually
 used. Failed archive windows use hidden `.failure.json` markers beside the intended archive and
-retain their raw `.ts` files. Logs and status files are retained according to `RETENTION_DAYS`;
+retain their raw `.ts` files. After a date changes, the daily archiver packages the complete
+previous date as `archives/YYYY-MM-DD.7z` using 7-Zip Store (`-mx=0`), verifies it with `7z t`,
+and retries it on the next scan if needed. Source directories are retained by default; set
+`DAILY_ARCHIVE_DELETE_SOURCE=true` only if the verified archive should replace the source.
+Logs and status files are retained according to `RETENTION_DAYS`;
 application and per-camera logs also rotate by size.
 
 Metadata CSVs retain the traffic and weather cache-status columns (`fresh`, `cached`, and
